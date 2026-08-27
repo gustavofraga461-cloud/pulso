@@ -213,6 +213,12 @@ function removeMember(conversationId, userId) {
   );
 }
 
+function deleteConversation(conversationId) {
+  // A tabela conversation_members e messages têm ON DELETE CASCADE,
+  // então apagar a conversa já apaga os membros e mensagens junto.
+  db.prepare('DELETE FROM conversations WHERE id = ?').run(Number(conversationId));
+}
+
 function getMemberIds(conversationId) {
   return db
     .prepare('SELECT user_id FROM conversation_members WHERE conversation_id = ?')
@@ -435,6 +441,7 @@ module.exports = {
   createConversation,
   addMember,
   removeMember,
+  deleteConversation,
   getMemberIds,
   isMember,
   getConversationIdsForUser,

@@ -446,6 +446,10 @@ function connectSocket() {
   socket.on('presence', handlePresence);
   socket.on('conversation:update', handleConversationUpdate);
   socket.on('conversation:new', handleConversationNew);
+  socket.on('conversation:deleted', ({ conversationId }) => {
+    removeConversationFromView(conversationId);
+    toast('Uma conversa foi apagada', 'info');
+  });
 }
 
 // ---------- conversations list ----------
@@ -600,6 +604,19 @@ async function openConversation(convId, opts = {}) {
   if (!App.convMeta[convId]) {
     try {
       const { conversation } = await API.conversation(convId);
+      // O backend não inclui "peer" pronto nessa rota — monta aqui a partir
+      // dos membros, senão o avatar/perfil da outra pessoa fica quebrado.
+      if (conversation.type === 'private' && !conversation.peer) {
+        const peerMember = conversation.members.find((m) => m.userId !== App.me.id);
+        if (peerMember) {
+          conversation.peer = {
+            id: peerMember.userId,
+            username: peerMember.username,
+            online: peerMember.online,
+            lastSeen: peerMember.lastSeen,
+          };
+        }
+      }
       App.convMeta[convId] = conversation;
     } catch (err) {
       App.activeConvId = null;
@@ -631,8 +648,13 @@ function renderChatHeader() {
   const name = document.getElementById('chatPeerName');
   const status = document.getElementById('chatPeerStatus');
   const avatarWrap = document.getElementById('chatPeerAvatar');
+  // Usa os dados completos do membro (que tem a foto) em vez de conv.peer,
+  // que não carrega o avatar — é isso que fazia a foto sumir ao abrir o chat.
+  const peerFull = conv.type === 'private' && conv.members
+    ? conv.members.find((m) => m.userId !== App.me.id)
+    : null;
   const avatar = avatarEl(
-    conv.type === 'group' ? { avatar: conv.avatar, displayName: conv.name, username: '' } : conv.peer || { displayName: conv.name },
+    conv.type === 'group' ? { avatar: conv.avatar, displayName: conv.name, username: '' } : peerFull || conv.peer || { displayName: conv.name },
     42
   );
   avatarWrap.innerHTML = '';
@@ -894,8 +916,14 @@ async function sendMediaMessage(type, content) {
     const { message } = await API.sendMessage(App.activeConvId, type, content);
     if (message) {
       if (!App.messages[App.activeConvId]) App.messages[App.activeConvId] = [];
-      App.messages[App.activeConvId].push(message);
-      appendNewMessageDom(message);
+      const list = App.messages[App.activeConvId];
+      // O evento em tempo real (handleMessageNew) pode chegar antes desta resposta
+      // e já ter inserido essa mesma mensagem — só adiciona se ainda não estiver lá,
+      // senão a foto/áudio aparece duplicada na tela.
+      if (!list.some((m) => m.id === message.id)) {
+        list.push(message);
+        appendNewMessageDom(message);
+      }
     }
   } catch (err) {
     toast(err.message, 'error');
@@ -1614,9 +1642,58 @@ function openPrivateInfo(conv) {
       el('button', {
         class: 'btn btn-primary btn-block', text: 'Enviar mensagem',
         onclick: () => { closeModal(overlay); openConversation(conv.id); },
+      }),
+      el('button', {
+        class: 'btn btn-danger btn-block', text: 'Apagar conversa',
+        onclick: () => confirmDeleteConversation(conv, overlay),
       })
     )
   );
+}
+
+// ---------- apagar conversa ----------
+function confirmDeleteConversation(conv, infoOverlay) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Apagar conversa' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('p', { text: 'Isso vai apagar essa conversa e todas as mensagens dela, para todos os participantes. Essa ação não pode ser desfeita.' })
+    ),
+    el('div', { class: 'modal-footer' },
+      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
+      el('button', {
+        class: 'btn btn-danger btn-block', text: 'Apagar',
+        onclick: async () => {
+          try {
+            await API.deleteConversation(conv.id);
+            closeModal(overlay);
+            if (infoOverlay) closeModal(infoOverlay);
+            removeConversationFromView(conv.id);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
+    )
+  );
+}
+
+function removeConversationFromView(convId) {
+  App.conversations = App.conversations.filter((c) => c.id !== convId);
+  delete App.convMeta[convId];
+  delete App.messages[convId];
+  if (App.activeConvId === convId) {
+    App.activeConvId = null;
+    document.getElementById('chatView').hidden = true;
+    document.getElementById('emptyState').hidden = false;
+    document.body.classList.remove('view-chat');
+  }
+  renderConversations();
+  updateTitle();
 }
 
 function openGroupInfo(conv) {
@@ -1699,27 +1776,30 @@ function openGroupInfo(conv) {
   renderMembers();
   body.append(memberList);
 
+  const footerButtons = [
+    el('button', {
+      class: 'btn btn-danger btn-block', text: 'Sair do grupo',
+      onclick: async () => {
+        try {
+          await API.leaveGroup(conv.id);
+          closeModal(overlay);
+          removeConversationFromView(conv.id);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      },
+    }),
+  ];
+  if (isAdmin) {
+    footerButtons.push(el('button', {
+      class: 'btn btn-danger btn-block', text: 'Apagar conversa para todos',
+      onclick: () => confirmDeleteConversation(conv, overlay),
+    }));
+  }
+
   box.append(
     body,
-    el('div', { class: 'modal-footer' },
-      el('button', {
-        class: 'btn btn-danger btn-block', text: 'Sair do grupo',
-        onclick: async () => {
-          try {
-            await API.leaveGroup(conv.id);
-            closeModal(overlay);
-            App.conversations = App.conversations.filter((c) => c.id !== conv.id);
-            App.activeConvId = null;
-            renderConversations();
-            document.getElementById('chatView').hidden = true;
-            document.getElementById('emptyState').hidden = false;
-            document.body.classList.remove('view-chat');
-          } catch (err) {
-            toast(err.message, 'error');
-          }
-        },
-      })
-    )
+    el('div', { class: 'modal-footer' }, ...footerButtons)
   );
 }
 

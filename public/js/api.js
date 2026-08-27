@@ -121,6 +121,9 @@ const API = {
   leaveGroup(conversationId) {
     return this.post(`/api/conversations/${conversationId}/leave`);
   },
+  deleteConversation(conversationId) {
+    return this.request('DELETE', `/api/conversations/${conversationId}`);
+  },
   upload(file) {
     const fd = new FormData();
     fd.append('file', file);

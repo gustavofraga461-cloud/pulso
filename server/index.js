@@ -13,7 +13,10 @@ const push = require('./push');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+// Usa o mesmo DATA_DIR do banco de dados (disco persistente no Render),
+// senão os arquivos enviados (fotos, áudios) somem a cada reinício do servidor.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
@@ -221,6 +224,19 @@ app.post('/api/conversations/:id/leave', authRequired, (req, res) => {
   emitConversationUpdate(conv.id);
   const left = db.getLastMessage(conv.id);
   if (left) io.to(`conv:${conv.id}`).emit('message:new', left);
+  res.json({ ok: true });
+});
+
+app.delete('/api/conversations/:id', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) {
+    return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  }
+  const memberIds = conv.members.map((m) => m.userId);
+  db.deleteConversation(conv.id);
+  // Avisa quem estiver online que a conversa sumiu, pra tela dele atualizar sozinha.
+  io.to(`conv:${conv.id}`).emit('conversation:deleted', { conversationId: conv.id });
+  for (const uid of memberIds) syncUserRooms(uid);
   res.json({ ok: true });
 });
 
