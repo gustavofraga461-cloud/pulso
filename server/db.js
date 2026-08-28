@@ -84,6 +84,7 @@ function ensureColumn(table, column, definition) {
   }
 }
 ensureColumn('messages', 'deleted', "INTEGER NOT NULL DEFAULT 0");
+ensureColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');
 
 function now() {
   return Date.now();
@@ -103,6 +104,7 @@ function sanitizeUser(row) {
     avatar: row.avatar || '',
     online: !!row.online,
     lastSeen: Number(row.last_seen || 0),
+    isBot: !!row.is_bot,
     createdAt: Number(row.created_at),
   };
 }
@@ -156,7 +158,7 @@ function searchUsers(query, excludeUserId, limit = 20) {
   const like = `%${query}%`;
   const rows = db
     .prepare(
-      'SELECT * FROM users WHERE username LIKE ? AND id != ? ORDER BY username LIMIT ?'
+      'SELECT * FROM users WHERE username LIKE ? AND id != ? AND is_bot = 0 ORDER BY username LIMIT ?'
     )
     .all(like, Number(excludeUserId), limit);
   return rows.map(sanitizeUser);
@@ -188,6 +190,56 @@ function setUserPresence(userId, online) {
     .prepare('UPDATE users SET online = ?, last_seen = CASE WHEN ? = 1 THEN last_seen ELSE ? END WHERE id = ?')
     .run(online ? 1 : 0, online ? 1 : 0, online ? 0 : now(), Number(userId));
   return row;
+}
+
+// ---------- bot FragaIA ----------
+const BOT_USERNAME = 'fragaia';
+
+function ensureBotUser() {
+  let bot = getUserByUsername(BOT_USERNAME);
+  if (bot) return bot;
+  const salt = crypto.randomBytes(16).toString('hex');
+  // Senha aleatória e descartada: o bot nunca faz login normal, então ninguém precisa dela.
+  const randomPassword = crypto.randomBytes(24).toString('hex');
+  const hash = hashPassword(randomPassword, salt);
+  const info = db
+    .prepare(
+      'INSERT INTO users (username, password_hash, salt, display_name, bio, avatar, is_bot, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+    )
+    .run(
+      BOT_USERNAME,
+      hash,
+      salt,
+      'FragaIA 🤖',
+      'Sua assistente de IA aqui no Pulse ✨ Pode me chamar!',
+      '/icons/fragaia-avatar.svg',
+      now()
+    );
+  return getUserById(Number(info.lastInsertRowid));
+}
+
+function getBotUser() {
+  return getUserByUsername(BOT_USERNAME);
+}
+
+// Garante que todo usuário tenha uma conversa fixa com o FragaIA, criando na
+// primeira vez (e mandando uma mensagem de boas-vindas do bot).
+function ensureBotConversation(userId) {
+  const bot = ensureBotUser();
+  if (Number(userId) === bot.id) return null;
+  let convId = findPrivateConversation(userId, bot.id);
+  if (!convId) {
+    convId = createConversation({ type: 'private', createdBy: userId });
+    addMember(convId, userId, 1);
+    addMember(convId, bot.id, 1);
+    addMessage(
+      convId,
+      bot.id,
+      'text',
+      'Oi! Eu sou o FragaIA 🤖 Pode me perguntar qualquer coisa por aqui, a qualquer hora.'
+    );
+  }
+  return convId;
 }
 
 function findPrivateConversation(a, b) {
@@ -266,6 +318,7 @@ function getConversation(id) {
       bio: u ? u.bio : '',
       online: u ? u.online : false,
       lastSeen: u ? u.lastSeen : 0,
+      isBot: u ? u.isBot : false,
       lastReadMessageId: Number(r.last_read_message_id),
       isAdmin: !!r.is_admin,
       joinedAt: Number(r.joined_at),
@@ -415,7 +468,7 @@ function buildConversationSummary(userId, conversation) {
     type: conversation.type,
     name: conversation.type === 'group' ? conversation.name : peer ? peer.displayName : 'Conversa',
     avatar: conversation.type === 'group' ? conversation.avatar : peer ? peer.avatar : '',
-    peer: peer ? { id: peer.userId, username: peer.username, online: peer.online, lastSeen: peer.lastSeen } : null,
+    peer: peer ? { id: peer.userId, username: peer.username, online: peer.online, lastSeen: peer.lastSeen, isBot: peer.isBot } : null,
     unread,
     lastMessage,
     lastActivity: lastMessage ? lastMessage.createdAt : conversation.createdAt,
@@ -491,6 +544,10 @@ module.exports = {
   markRead,
   buildConversationSummary,
   getConversationList,
+  ensureBotUser,
+  getBotUser,
+  ensureBotConversation,
+  BOT_USERNAME,
   upsertPushSubscription,
   deletePushSubscription,
   deletePushSubscriptionsByUser,

@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 
 const db = require('./db');
 const push = require('./push');
+const ai = require('./ai');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -134,6 +135,7 @@ app.put('/api/users/me', authRequired, (req, res) => {
 
 // ---------- REST: conversations ----------
 app.get('/api/conversations', authRequired, (req, res) => {
+  db.ensureBotConversation(req.user.id);
   res.json({ conversations: db.getConversationList(req.user.id) });
 });
 
@@ -276,7 +278,39 @@ app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
   if (payload) io.to(`conv:${conv.id}`).emit('message:new', payload);
   pushMessageToRecipients(conv, payload, req.user.id);
   res.status(201).json({ message: payload });
+
+  maybeReplyAsBot(conv, req.user.id);
 });
+
+// ---------- bot FragaIA: gera e envia a resposta da IA ----------
+function maybeReplyAsBot(conversation, fromUserId) {
+  const bot = db.getBotUser();
+  if (!bot || conversation.type !== 'private') return;
+  const isBotConversation = conversation.members.some((m) => m.userId === bot.id);
+  if (!isBotConversation || Number(fromUserId) === bot.id) return;
+
+  // Roda em segundo plano: quem mandou a mensagem já recebeu a resposta HTTP normal,
+  // a resposta do bot chega depois via socket, como uma mensagem nova de verdade.
+  (async () => {
+    try {
+      const recent = db.getMessages(conversation.id, { limit: 20 });
+      const history = recent
+        .filter((m) => m.type === 'text' && !m.deleted)
+        .map((m) => ({ role: m.senderId === bot.id ? 'model' : 'user', text: m.content }));
+
+      const replyText = await ai.generateReply(history);
+      const replyId = db.addMessage(conversation.id, bot.id, 'text', replyText);
+      const replyPayload = db.getLastMessage(conversation.id);
+      if (replyPayload) {
+        io.to(`conv:${conversation.id}`).emit('message:new', replyPayload);
+        const freshConv = db.getConversation(conversation.id);
+        pushMessageToRecipients(freshConv, replyPayload, bot.id);
+      }
+    } catch (err) {
+      console.error('Erro ao gerar resposta do FragaIA:', err);
+    }
+  })();
+}
 
 app.delete('/api/conversations/:id/messages/:messageId', authRequired, (req, res) => {
   const conv = db.getConversation(req.params.id);
@@ -450,5 +484,9 @@ app.get('*', (req, res) => {
 });
 
 server.listen(PORT, () => {
+  db.ensureBotUser();
+  if (!ai.isConfigured()) {
+    console.warn('Aviso: GEMINI_API_KEY não configurada — o FragaIA vai responder com um aviso até você configurar essa variável de ambiente.');
+  }
   console.log(`Pulse server rodando em http://localhost:${PORT}`);
 });

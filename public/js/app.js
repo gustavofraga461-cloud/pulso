@@ -454,10 +454,20 @@ function connectSocket() {
 }
 
 // ---------- conversations list ----------
+function sortConversations(list) {
+  list.sort((a, b) => {
+    const aPinned = a.peer && a.peer.isBot ? 1 : 0;
+    const bPinned = b.peer && b.peer.isBot ? 1 : 0;
+    if (aPinned !== bPinned) return bPinned - aPinned;
+    return b.lastActivity - a.lastActivity;
+  });
+  return list;
+}
+
 async function loadConversations() {
   try {
     const { conversations } = await API.conversations();
-    App.conversations = conversations;
+    App.conversations = sortConversations(conversations);
     for (const c of conversations) App.convMeta[c.id] = c;
     renderConversations();
     updateTitle();
@@ -512,17 +522,21 @@ function renderConversations() {
 function convItem(c, inSearch) {
   const typing = isTypingIn(c.id);
   const lastMsg = c.lastMessage;
-  const item = el('div', { class: 'conv-item' + (App.activeConvId === c.id ? ' active' : ''), 'data-id': c.id });
+  const isBotConv = !!(c.peer && c.peer.isBot);
+  const item = el('div', { class: 'conv-item' + (App.activeConvId === c.id ? ' active' : '') + (isBotConv ? ' pinned' : ''), 'data-id': c.id });
 
   const peerForDot = c.type === 'private' && c.peer ? c.peer : null;
   item.append(
     avatarEl(
       { avatar: c.avatar, displayName: c.name, username: (c.peer && c.peer.username) || '' },
       46,
-      { showOnline: c.type === 'private', online: peerForDot ? peerForDot.online : false }
+      { showOnline: c.type === 'private' && !isBotConv, online: peerForDot ? peerForDot.online : false }
     ),
     el('div', { class: 'conv-mid' },
-      el('div', { class: 'conv-name', text: c.name }),
+      el('div', { class: 'conv-name' },
+        el('span', { class: 'conv-name-text', text: c.name }),
+        isBotConv ? el('span', { class: 'conv-bot-badge', text: 'IA' }) : null
+      ),
       el('div', { class: 'conv-last' + (c.unread ? ' unread' : '') + (typing ? ' typing' : ''),
         text: typing ? 'digitando...' : messagePreviewText(lastMsg, App.me.id) })
     ),
@@ -568,7 +582,7 @@ function upsertConversation(conv) {
   if (idx >= 0) App.conversations[idx] = summary;
   else App.conversations.unshift(summary);
   App.convMeta[conv.id] = summary;
-  App.conversations.sort((a, b) => b.lastActivity - a.lastActivity);
+  sortConversations(App.conversations);
   renderConversations();
   updateTitle();
 }
@@ -1075,7 +1089,7 @@ function handleMessageNew(msg) {
     notifyBrowser(notif);
   }
 
-  App.conversations.sort((a, b) => b.lastActivity - a.lastActivity);
+  sortConversations(App.conversations);
   renderConversations();
   updateTitle();
 
