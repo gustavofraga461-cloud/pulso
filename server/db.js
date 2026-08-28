@@ -75,6 +75,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
 `);
 
+// Migração leve: adiciona colunas novas em bancos já existentes (ex: no Render)
+// sem precisar apagar o banco. PRAGMA table_info diz quais colunas já existem.
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('messages', 'deleted', "INTEGER NOT NULL DEFAULT 0");
+
 function now() {
   return Date.now();
 }
@@ -272,6 +282,23 @@ function getConversation(id) {
   };
 }
 
+function updateConversation(conversationId, fields) {
+  const sets = [];
+  const args = [];
+  if (fields.name !== undefined) {
+    sets.push('name = ?');
+    args.push(fields.name);
+  }
+  if (fields.avatar !== undefined) {
+    sets.push('avatar = ?');
+    args.push(fields.avatar);
+  }
+  if (!sets.length) return getConversation(conversationId);
+  args.push(Number(conversationId));
+  db.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  return getConversation(conversationId);
+}
+
 function addMessage(conversationId, senderId, type, content) {
   const info = db
     .prepare(
@@ -283,6 +310,10 @@ function addMessage(conversationId, senderId, type, content) {
 
 function getMessage(id) {
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(Number(id));
+}
+
+function deleteMessageForEveryone(messageId) {
+  db.prepare("UPDATE messages SET deleted = 1, content = '' WHERE id = ?").run(Number(messageId));
 }
 
 function markDelivered(conversationId, upToId) {
@@ -315,7 +346,8 @@ function buildMessagePayload(message, conversation) {
     conversationId: Number(message.conversation_id),
     senderId: message.sender_id ? Number(message.sender_id) : null,
     type: message.type,
-    content: message.content,
+    content: message.deleted ? '' : message.content,
+    deleted: !!message.deleted,
     createdAt: Number(message.created_at),
     delivered: !!message.delivered,
     status: computeStatus(message, conversation),
@@ -446,8 +478,10 @@ module.exports = {
   isMember,
   getConversationIdsForUser,
   getConversation,
+  updateConversation,
   addMessage,
   getMessage,
+  deleteMessageForEveryone,
   markDelivered,
   computeStatus,
   buildMessagePayload,

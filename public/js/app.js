@@ -441,6 +441,7 @@ function connectSocket() {
   });
 
   socket.on('message:new', handleMessageNew);
+  socket.on('message:deleted', handleMessageDeleted);
   socket.on('read', handleRead);
   socket.on('typing', handleTyping);
   socket.on('presence', handlePresence);
@@ -727,12 +728,19 @@ function messageDom(msg, conv) {
   const mine = msg.senderId === App.me.id;
   const bubbleChildren = [];
 
-  if (!mine && conv.type === 'group') {
+  if (!mine && conv.type === 'group' && !msg.deleted) {
     const sender = msg.sender || {};
     bubbleChildren.push(el('div', { class: 'msg-sender', style: `color:${senderColor(msg.senderId)}`, text: sender.displayName || '?' }));
   }
 
-  if (msg.type === 'image') {
+  if (msg.deleted) {
+    bubbleChildren.push(
+      el('span', { class: 'msg-text msg-deleted-text' },
+        el('span', { class: 'msg-deleted-ico', html: ICONS.trash }),
+        'Mensagem apagada'
+      )
+    );
+  } else if (msg.type === 'image') {
     bubbleChildren.push(el('img', { class: 'msg-image', src: msg.content, loading: 'lazy', alt: 'Foto', onclick: () => openLightbox(msg.content) }));
   } else if (msg.type === 'audio') {
     bubbleChildren.push(el('audio', { class: 'msg-audio', src: msg.content, controls: true, preload: 'metadata' }));
@@ -747,8 +755,88 @@ function messageDom(msg, conv) {
     )
   );
 
-  const bubble = el('div', { class: 'bubble' }, ...bubbleChildren);
-  return el('div', { class: `msg ${mine ? 'mine' : 'theirs'} ${msg.type}`, 'data-mid': msg.id, 'data-day': startOfDay(msg.createdAt) }, bubble);
+  const bubble = el('div', { class: 'bubble' + (msg.deleted ? ' deleted' : '') }, ...bubbleChildren);
+  const row = el('div', {
+    class: `msg ${mine ? 'mine' : 'theirs'} ${msg.type}` + (msg.deleted ? ' deleted' : ''),
+    'data-mid': msg.id,
+    'data-day': startOfDay(msg.createdAt),
+  }, bubble);
+
+  if (!msg.deleted && canDeleteMessage(msg, conv)) {
+    attachDeleteGesture(row, msg, conv);
+  }
+
+  return row;
+}
+
+// ---------- apagar mensagem para todos ----------
+function canDeleteMessage(msg, conv) {
+  if (!msg || msg.type === 'system' || msg.deleted) return false;
+  if (msg.senderId === App.me.id) return true;
+  const meMember = conv && conv.members && conv.members.find((m) => m.userId === App.me.id);
+  return !!(conv && conv.type === 'group' && meMember && meMember.isAdmin);
+}
+
+function attachDeleteGesture(row, msg, conv) {
+  let pressTimer = null;
+  const start = () => {
+    pressTimer = setTimeout(() => openDeleteMessageMenu(msg, conv), 480);
+  };
+  const cancel = () => {
+    if (pressTimer) clearTimeout(pressTimer);
+    pressTimer = null;
+  };
+  row.addEventListener('touchstart', start, { passive: true });
+  row.addEventListener('touchend', cancel);
+  row.addEventListener('touchmove', cancel);
+  row.addEventListener('touchcancel', cancel);
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openDeleteMessageMenu(msg, conv);
+  });
+}
+
+function openDeleteMessageMenu(msg, conv) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Apagar mensagem' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('p', { text: 'Apagar essa mensagem para todos os participantes da conversa? Ela vai virar "Mensagem apagada" para todo mundo. Essa ação não pode ser desfeita.' })
+    ),
+    el('div', { class: 'modal-footer' },
+      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
+      el('button', {
+        class: 'btn btn-danger btn-block', text: 'Apagar para todos',
+        onclick: async () => {
+          try {
+            const { message } = await API.deleteMessage(conv.id, msg.id);
+            handleMessageDeleted(message);
+            closeModal(overlay);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
+    )
+  );
+}
+
+function handleMessageDeleted(msg) {
+  const list = App.messages[msg.conversationId];
+  if (list) {
+    const idx = list.findIndex((m) => m.id === msg.id);
+    if (idx >= 0) list[idx] = msg;
+  }
+  const summary = App.conversations.find((c) => c.id === msg.conversationId);
+  if (summary && summary.lastMessage && summary.lastMessage.id === msg.id) {
+    summary.lastMessage = msg;
+  }
+  if (App.activeConvId === msg.conversationId) replaceMessageDom(msg);
+  renderConversations();
 }
 
 function statusIconEl(msg) {
@@ -1708,13 +1796,38 @@ function openGroupInfo(conv) {
   const isAdmin = meMember && meMember.isAdmin;
 
   const body = el('div', { class: 'modal-body' });
-  body.append(
-    el('div', { class: 'profile-hero' },
-      el('div', { class: 'profile-avatar' }, avatarEl({ avatar: conv.avatar, displayName: conv.name, username: '' }, 96)),
-      el('h3', { class: 'profile-name', text: conv.name }),
-      el('div', { class: 'profile-status', text: `${conv.members.length} membros` })
-    )
-  );
+  const groupAvatarWrap = el('div', { class: 'profile-avatar' }, avatarEl({ avatar: conv.avatar, displayName: conv.name, username: '' }, 96));
+  const heroChildren = [
+    groupAvatarWrap,
+    el('h3', { class: 'profile-name', text: conv.name }),
+    el('div', { class: 'profile-status', text: `${conv.members.length} membros` }),
+  ];
+  if (isAdmin) {
+    const hiddenFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
+    const avatarBtn = el('button', { class: 'avatar-edit', type: 'button', title: 'Trocar foto do grupo' },
+      el('span', { class: 'avatar-edit-ico', html: ICONS.camera }));
+    avatarBtn.addEventListener('click', () => hiddenFile.click());
+    hiddenFile.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file || !file.type.startsWith('image/')) return;
+      try {
+        const { url } = await API.upload(file);
+        const { conversation } = await API.updateGroupAvatar(conv.id, url);
+        App.convMeta[conversation.id] = conversation;
+        conv.avatar = conversation.avatar;
+        groupAvatarWrap.innerHTML = '';
+        groupAvatarWrap.append(avatarEl({ avatar: conv.avatar, displayName: conv.name, username: '' }, 96));
+        renderConversations();
+        if (App.activeConvId === conv.id) renderChatHeader();
+        toast('Foto do grupo atualizada');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+    heroChildren.push(hiddenFile, avatarBtn);
+  }
+  body.append(el('div', { class: 'profile-hero' }, ...heroChildren));
 
   const memberList = el('div', { class: 'group-members' });
   function renderMembers() {
@@ -1892,9 +2005,54 @@ function openSettingsModal() {
       el('div', { class: 'profile-uname', text: '@' + App.me.username })
     ),
     form,
+    buildThemePicker(),
     el('div', { class: 'modal-footer settings-logout' },
       el('button', { class: 'btn btn-danger btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } })
     )
+  );
+}
+
+// ---------- temas ----------
+const THEMES = [
+  { key: 'blue', label: 'Azul (padrão)', swatch: ['#0a101d', '#2f6bff', '#4d86ff'] },
+  { key: 'mono', label: 'Preto e branco', swatch: ['#050505', '#ffffff', '#8a8a8a'] },
+  { key: 'redblack', label: 'Vermelho e preto', swatch: ['#0a0505', '#ff3b3b', '#241212'] },
+  { key: 'green', label: 'Verde escuro e branco', swatch: ['#06120d', '#16a34a', '#f2fbf7'] },
+];
+
+function applyTheme(key) {
+  const theme = THEMES.some((t) => t.key === key) ? key : 'blue';
+  if (theme === 'blue') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('pulse_theme', theme);
+}
+
+function loadTheme() {
+  const saved = localStorage.getItem('pulse_theme') || 'blue';
+  applyTheme(saved);
+}
+
+function buildThemePicker() {
+  const current = localStorage.getItem('pulse_theme') || 'blue';
+  const grid = el('div', { class: 'theme-grid' });
+  for (const t of THEMES) {
+    const swatch = el('span', { class: 'theme-swatch' },
+      ...t.swatch.map((c) => el('span', { class: 'theme-swatch-dot', style: `background:${c}` }))
+    );
+    const btn = el('button', {
+      class: 'theme-option' + (t.key === current ? ' active' : ''),
+      type: 'button',
+      onclick: () => {
+        applyTheme(t.key);
+        grid.querySelectorAll('.theme-option').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      },
+    }, swatch, el('span', { class: 'theme-option-label', text: t.label }));
+    grid.append(btn);
+  }
+  return el('div', { class: 'settings-section' },
+    el('label', { class: 'field-label', text: 'Cores do app' }),
+    grid
   );
 }
 
@@ -1926,4 +2084,5 @@ function senderColor(id) {
 }
 
 // ---------- start ----------
+loadTheme();
 init();

@@ -191,6 +191,21 @@ app.post('/api/conversations', authRequired, (req, res) => {
   res.status(400).json({ error: 'tipo_invalido' });
 });
 
+app.put('/api/conversations/:id/avatar', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  if (conv.type !== 'group') return res.status(400).json({ error: 'operacao_invalida' });
+  const member = conv.members.find((m) => m.userId === req.user.id);
+  if (!member || !member.isAdmin) return res.status(403).json({ error: 'sem_permissao' });
+  const avatar = String(req.body.avatar || '');
+  db.updateConversation(conv.id, { avatar });
+  db.addMessage(conv.id, req.user.id, 'system', `${req.user.displayName} alterou a foto do grupo`);
+  emitConversationUpdate(conv.id);
+  const changed = db.getLastMessage(conv.id);
+  if (changed) io.to(`conv:${conv.id}`).emit('message:new', changed);
+  res.json({ conversation: db.getConversation(conv.id) });
+});
+
 app.post('/api/conversations/:id/members', authRequired, (req, res) => {
   const conv = db.getConversation(req.params.id);
   if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
@@ -261,6 +276,26 @@ app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
   if (payload) io.to(`conv:${conv.id}`).emit('message:new', payload);
   pushMessageToRecipients(conv, payload, req.user.id);
   res.status(201).json({ message: payload });
+});
+
+app.delete('/api/conversations/:id/messages/:messageId', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  const message = db.getMessage(req.params.messageId);
+  if (!message || Number(message.conversation_id) !== conv.id) {
+    return res.status(404).json({ error: 'mensagem_nao_encontrada' });
+  }
+  if (message.type === 'system') return res.status(400).json({ error: 'operacao_invalida' });
+  const member = conv.members.find((m) => m.userId === req.user.id);
+  const isSender = message.sender_id && Number(message.sender_id) === req.user.id;
+  const isGroupAdmin = conv.type === 'group' && member && member.isAdmin;
+  if (!isSender && !isGroupAdmin) return res.status(403).json({ error: 'sem_permissao' });
+
+  db.deleteMessageForEveryone(message.id);
+  const payload = db.buildMessagePayload(db.getMessage(message.id), db.getConversation(conv.id));
+  io.to(`conv:${conv.id}`).emit('message:deleted', payload);
+  emitConversationUpdate(conv.id);
+  res.json({ message: payload });
 });
 
 app.post('/api/conversations/:id/read', authRequired, (req, res) => {

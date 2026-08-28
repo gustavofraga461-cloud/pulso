@@ -133,6 +133,7 @@ function messagePreviewText(message, myUserId) {
   if (!message) return '';
   if (message.type === 'system') return message.content || '';
   const prefix = message.senderId === myUserId ? 'Você: ' : '';
+  if (message.deleted) return `${prefix}Mensagem apagada`;
   if (message.type === 'image') return `${prefix}Foto`;
   if (message.type === 'audio') return `${prefix}Áudio`;
   return `${prefix}${message.content}`;

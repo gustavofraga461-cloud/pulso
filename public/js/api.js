@@ -118,6 +118,12 @@ const API = {
   addGroupMember(conversationId, userId) {
     return this.post(`/api/conversations/${conversationId}/members`, { userId });
   },
+  updateGroupAvatar(conversationId, avatar) {
+    return this.put(`/api/conversations/${conversationId}/avatar`, { avatar });
+  },
+  deleteMessage(conversationId, messageId) {
+    return this.request('DELETE', `/api/conversations/${conversationId}/messages/${messageId}`);
+  },
   leaveGroup(conversationId) {
     return this.post(`/api/conversations/${conversationId}/leave`);
   },
