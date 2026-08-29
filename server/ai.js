@@ -61,7 +61,9 @@ async function generateReply(history) {
     generationConfig: { maxOutputTokens: 800, temperature: 0.85 },
   };
 
-  const modelsToTry = workingModel ? [workingModel] : MODEL_CANDIDATES;
+  const modelsToTry = workingModel
+    ? [workingModel, ...MODEL_CANDIDATES.filter((m) => m !== workingModel)]
+    : MODEL_CANDIDATES;
   let lastStatus = 0;
   let lastErrText = '';
 
@@ -98,9 +100,14 @@ async function generateReply(history) {
     lastErrText = await res.text().catch(() => '');
     console.error(`Erro na API do Gemini (modelo "${model}"):`, res.status, lastErrText);
 
-    // 404 costuma ser "esse nome de modelo não existe" — vale tentar o próximo da lista.
+    // 404 = esse nome de modelo não existe. 503 = modelo sobrecarregado agora.
+    // Em ambos os casos vale tentar o próximo modelo da lista.
     // Pra qualquer outro erro (401, 403, 429...) não adianta trocar de modelo, então já para.
-    if (res.status !== 404) break;
+    if (res.status !== 404 && res.status !== 503) {
+      workingModel = null; // não trava nesse modelo se ele começou a dar erro de verdade
+      break;
+    }
+    workingModel = null;
   }
 
   if (lastStatus === 429) {
@@ -108,6 +115,9 @@ async function generateReply(history) {
   }
   if (lastStatus === 401 || lastStatus === 403) {
     return 'Minha chave de acesso à IA parece inválida ou sem permissão. Peça pra quem administra o Pulse conferir a variável GEMINI_API_KEY no Render.';
+  }
+  if (lastStatus === 503) {
+    return 'Meus modelos de IA estão todos com muita gente usando agora 😅 Tenta de novo daqui a pouquinho.';
   }
   return 'Deu um errinho aqui tentando pensar na resposta. Pode tentar de novo?';
 }
