@@ -42,9 +42,14 @@ async function generateReply(history) {
 
   let res;
   try {
-    res = await fetch(`${ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    res = await fetch(ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // Chaves novas do Google (formato "AQ...") só funcionam nesse cabeçalho,
+        // não no jeito antigo de colar a chave na URL (?key=...).
+        'X-goog-api-key': GEMINI_API_KEY,
+      },
       body: JSON.stringify(body),
     });
   } catch (err) {
