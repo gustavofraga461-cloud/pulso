@@ -12,7 +12,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 // tentamos essa lista em ordem até um funcionar, e guardamos qual deu certo.
 const MODEL_CANDIDATES = process.env.GEMINI_MODEL
   ? [process.env.GEMINI_MODEL]
-  : ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-pro-latest'];
+  : ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-pro-latest'];
 
 let workingModel = null;
 
