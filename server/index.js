@@ -129,6 +129,7 @@ app.put('/api/users/me', authRequired, (req, res) => {
   if (req.body.displayName !== undefined) fields.displayName = String(req.body.displayName).trim().slice(0, 40) || req.user.username;
   if (req.body.bio !== undefined) fields.bio = String(req.body.bio).trim().slice(0, 120);
   if (req.body.avatar !== undefined) fields.avatar = String(req.body.avatar);
+  if (req.body.cover !== undefined) fields.cover = String(req.body.cover);
   const user = db.updateUser(req.user.id, fields);
   res.json({ user });
 });

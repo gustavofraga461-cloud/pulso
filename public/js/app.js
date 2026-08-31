@@ -643,6 +643,7 @@ async function openConversation(convId, opts = {}) {
   renderConversations();
   renderChatHeader();
   showChatView();
+  applyWallpaper(convId);
   if (!App.messages[convId]) App.messages[convId] = [];
   renderMessages();
   loadMessages(convId);
@@ -898,14 +899,17 @@ function renderMessages() {
     }
     container.append(messageDom(msg, conv));
   }
+  updateTypingBubble();
 }
 
 function appendNewMessageDom(msg) {
   const conv = App.convMeta[App.activeConvId];
   const container = document.getElementById('messages');
   if (!conv || !container) return;
+  const typingBubble = container.querySelector('.typing-indicator');
+  if (typingBubble) typingBubble.remove();
   const day = startOfDay(msg.createdAt);
-  const lastMsgEl = [...container.querySelectorAll('.msg')].pop();
+  const lastMsgEl = [...container.querySelectorAll('.msg:not(.typing-indicator)')].pop();
   const lastDay = lastMsgEl ? Number(lastMsgEl.dataset.day) : App.lastMsgDay;
   if (msg.type !== 'system' && day !== lastDay) {
     container.append(dateSep(msg.createdAt));
@@ -914,6 +918,7 @@ function appendNewMessageDom(msg) {
   App.lastMsgDay = day;
   const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180;
   if (nearBottom) scrollToBottom(true);
+  updateTypingBubble();
 }
 
 function replaceMessageDom(msg) {
@@ -990,6 +995,7 @@ async function sendTextMessage() {
   };
   App.messages[App.activeConvId].push(temp);
   appendNewMessageDom(temp);
+  playSentSound();
 
   try {
     const { message } = await API.sendMessage(App.activeConvId, 'text', content);
@@ -1016,6 +1022,7 @@ async function sendMediaMessage(type, content) {
   if (!App.activeConvId) return;
   try {
     const { message } = await API.sendMessage(App.activeConvId, type, content);
+    playSentSound();
     if (message) {
       if (!App.messages[App.activeConvId]) App.messages[App.activeConvId] = [];
       const list = App.messages[App.activeConvId];
@@ -1071,6 +1078,10 @@ function handleMessageNew(msg) {
   }
 
   const isActive = App.activeConvId === msg.conversationId;
+
+  if (!fromMe) {
+    playReceivedSound();
+  }
 
   if (!isActive && !fromMe) {
     if (summary) summary.unread += 1;
@@ -1136,12 +1147,40 @@ function handleTyping(data) {
       map.delete(data.userId);
       renderChatStatus();
       renderConversations();
+      if (App.activeConvId === data.conversationId) updateTypingBubble();
     }, 3500));
   } else {
     map.delete(data.userId);
   }
-  if (App.activeConvId === data.conversationId) renderChatStatus();
+  if (App.activeConvId === data.conversationId) {
+    renderChatStatus();
+    updateTypingBubble();
+  }
   renderConversations();
+}
+
+function typingDotsEl() {
+  return el('div', { class: 'msg theirs typing-indicator' },
+    el('div', { class: 'bubble typing-bubble' },
+      el('span', { class: 'typing-dot' }),
+      el('span', { class: 'typing-dot' }),
+      el('span', { class: 'typing-dot' })
+    )
+  );
+}
+
+function updateTypingBubble() {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const existing = container.querySelector('.typing-indicator');
+  const isTyping = isTypingIn(App.activeConvId);
+  if (isTyping && !existing) {
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 180;
+    container.append(typingDotsEl());
+    if (nearBottom) scrollToBottom(true);
+  } else if (!isTyping && existing) {
+    existing.remove();
+  }
 }
 
 function handlePresence(data) {
@@ -1732,6 +1771,9 @@ function openPrivateInfo(conv) {
   );
   box.classList.add('modal-profile');
   const peerFull = conv.members.find((m) => m.userId === peer.id) || peer;
+  if (peerFull.cover) {
+    box.append(el('div', { class: 'profile-cover', style: `background-image:url('${peerFull.cover}')` }));
+  }
   box.append(
     el('div', { class: 'profile-hero' },
       el('div', { class: 'profile-avatar' }, avatarEl(peerFull, 96, { showOnline: true, online: peer.online })),
@@ -1744,6 +1786,10 @@ function openPrivateInfo(conv) {
       el('button', {
         class: 'btn btn-primary btn-block', text: 'Enviar mensagem',
         onclick: () => { closeModal(overlay); openConversation(conv.id); },
+      }),
+      el('button', {
+        class: 'btn btn-block', text: '🖼️ Papel de parede da conversa',
+        onclick: () => openWallpaperPicker(conv.id),
       }),
       el('button', {
         class: 'btn btn-danger btn-block', text: 'Apagar conversa',
@@ -1905,6 +1951,10 @@ function openGroupInfo(conv) {
 
   const footerButtons = [
     el('button', {
+      class: 'btn btn-block', text: '🖼️ Papel de parede da conversa',
+      onclick: () => openWallpaperPicker(conv.id),
+    }),
+    el('button', {
       class: 'btn btn-danger btn-block', text: 'Sair do grupo',
       onclick: async () => {
         try {
@@ -1964,6 +2014,30 @@ function openSettingsModal() {
   );
   box.classList.add('modal-profile');
 
+  const coverWrap = el('div', {
+    class: 'profile-cover',
+    style: App.me.cover ? `background-image:url('${App.me.cover}')` : '',
+  });
+  const coverFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  const coverBtn = el('button', { class: 'cover-edit', type: 'button', title: 'Trocar foto de capa' },
+    el('span', { class: 'avatar-edit-ico', html: ICONS.camera }), ' Capa');
+  coverBtn.addEventListener('click', () => coverFile.click());
+  coverFile.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+    try {
+      const { url } = await API.upload(file);
+      const { user } = await API.updateMe({ cover: url });
+      App.me = user;
+      coverWrap.style.backgroundImage = `url('${url}')`;
+      toast('Foto de capa atualizada');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  coverWrap.append(coverFile, coverBtn);
+
   const avatarWrap = el('div', { class: 'profile-avatar settings-avatar' }, avatarImg(App.me, 96));
   const hiddenFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
   const avatarBtn = el('button', { class: 'avatar-edit', type: 'button', title: 'Trocar foto' },
@@ -2014,12 +2088,14 @@ function openSettingsModal() {
   });
 
   box.append(
+    coverWrap,
     el('div', { class: 'profile-hero' }, avatarWrap, hiddenFile, avatarBtn,
       el('h3', { class: 'profile-name', text: App.me.displayName }),
       el('div', { class: 'profile-uname', text: '@' + App.me.username })
     ),
     form,
     buildThemePicker(),
+    buildSoundToggle(),
     el('div', { class: 'modal-footer settings-logout' },
       el('button', { class: 'btn btn-danger btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } })
     )
@@ -2067,6 +2143,200 @@ function buildThemePicker() {
   return el('div', { class: 'settings-section' },
     el('label', { class: 'field-label', text: 'Cores do app' }),
     grid
+  );
+}
+
+// ---------- efeitos sonoros ----------
+let audioCtx = null;
+function getAudioCtx() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+function soundsEnabled() {
+  return localStorage.getItem('pulse_sounds') !== 'off';
+}
+function playTone(freq, duration, type, gainPeak, delay) {
+  if (!soundsEnabled()) return;
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    const start = ctx.currentTime + (delay || 0);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(gainPeak || 0.12, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + duration + 0.03);
+  } catch (e) {
+    /* dispositivo sem suporte a áudio — ignora silenciosamente */
+  }
+}
+function playSentSound() {
+  playTone(720, 0.07, 'sine', 0.1, 0);
+}
+function playReceivedSound() {
+  playTone(560, 0.08, 'sine', 0.12, 0);
+  playTone(840, 0.1, 'sine', 0.1, 0.07);
+}
+
+function buildSoundToggle() {
+  const on = soundsEnabled();
+  const row = el('div', { class: 'settings-section' },
+    el('label', { class: 'field-label', text: 'Sons' }),
+    el('button', {
+      class: 'sound-toggle' + (on ? ' active' : ''),
+      type: 'button',
+      onclick: function () {
+        const nowOn = localStorage.getItem('pulse_sounds') !== 'off';
+        localStorage.setItem('pulse_sounds', nowOn ? 'off' : 'on');
+        this.classList.toggle('active');
+        this.querySelector('.sound-toggle-label').textContent = nowOn ? 'Sons desativados' : 'Sons ativados';
+        if (!nowOn) playSentSound();
+      },
+    },
+      el('span', { class: 'sound-toggle-knob' }),
+      el('span', { class: 'sound-toggle-label', text: on ? 'Sons ativados' : 'Sons desativados' })
+    )
+  );
+  return row;
+}
+
+// ---------- papel de parede da conversa ----------
+const WALLPAPER_PRESETS = [
+  { key: 'default', label: 'Padrão do tema', css: '' },
+  { key: 'midnight', label: 'Meia-noite', css: 'linear-gradient(160deg, #0b1224, #1b2440)' },
+  { key: 'sunset', label: 'Pôr do sol', css: 'linear-gradient(160deg, #3a1c3d, #7a3b45, #c9743f)' },
+  { key: 'forest', label: 'Floresta', css: 'linear-gradient(160deg, #0c2318, #164a32)' },
+  { key: 'ocean', label: 'Oceano', css: 'linear-gradient(160deg, #041c33, #0c5c7a)' },
+  { key: 'dots', label: 'Pontilhado', css: 'radial-gradient(circle, rgba(255,255,255,0.08) 1.5px, transparent 1.5px), var(--bg)', size: '18px 18px' },
+];
+
+function wallpaperKey(convId) {
+  return `pulse_wallpaper:${convId}`;
+}
+
+function applyWallpaper(convId) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(wallpaperKey(convId)) || 'null'); } catch (e) { saved = null; }
+
+  container.style.backgroundImage = '';
+  container.style.backgroundSize = '';
+  container.style.backgroundPosition = '';
+  container.style.backgroundColor = '';
+
+  if (!saved) return;
+  if (saved.type === 'custom' && saved.dataUrl) {
+    container.style.backgroundImage = `url('${saved.dataUrl}')`;
+    container.style.backgroundSize = 'cover';
+    container.style.backgroundPosition = 'center';
+  } else if (saved.type === 'preset') {
+    const preset = WALLPAPER_PRESETS.find((p) => p.key === saved.key);
+    if (preset && preset.css) {
+      container.style.backgroundImage = preset.css;
+      if (preset.size) container.style.backgroundSize = preset.size;
+    }
+  }
+}
+
+function resizeImageFile(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não consegui ler a imagem'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Imagem inválida'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else if (height > maxDim) {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality || 0.72));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function openWallpaperPicker(convId) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Papel de parede' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+
+  const grid = el('div', { class: 'wallpaper-grid' });
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(wallpaperKey(convId)) || 'null'); } catch (e) { saved = null; }
+  const currentKey = saved && saved.type === 'preset' ? saved.key : (saved ? null : 'default');
+
+  for (const p of WALLPAPER_PRESETS) {
+    const swatch = el('button', {
+      class: 'wallpaper-swatch' + (p.key === currentKey ? ' active' : ''),
+      type: 'button',
+      style: p.css ? `background-image:${p.css};background-size:${p.size || 'cover'}` : 'background:var(--bg)',
+      title: p.label,
+      onclick: () => {
+        if (p.key === 'default') localStorage.removeItem(wallpaperKey(convId));
+        else localStorage.setItem(wallpaperKey(convId), JSON.stringify({ type: 'preset', key: p.key }));
+        applyWallpaper(convId);
+        closeModal(overlay);
+        toast('Papel de parede atualizado');
+      },
+    }, el('span', { class: 'wallpaper-swatch-label', text: p.label }));
+    grid.append(swatch);
+  }
+
+  const galleryBtn = el('button', { class: 'btn btn-block', type: 'button', text: '🖼️ Escolher foto da galeria' });
+  const galleryFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  galleryBtn.addEventListener('click', () => galleryFile.click());
+  galleryFile.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+    try {
+      toast('Ajustando imagem...');
+      const dataUrl = await resizeImageFile(file, 1280, 0.72);
+      localStorage.setItem(wallpaperKey(convId), JSON.stringify({ type: 'custom', dataUrl }));
+      applyWallpaper(convId);
+      closeModal(overlay);
+      toast('Papel de parede atualizado');
+    } catch (err) {
+      toast(err.message || 'Não consegui usar essa imagem', 'error');
+    }
+  });
+
+  box.append(
+    el('div', { class: 'modal-body' }, grid, galleryFile, galleryBtn),
+    el('div', { class: 'modal-footer' },
+      el('button', {
+        class: 'btn btn-block', text: 'Remover papel de parede',
+        onclick: () => {
+          localStorage.removeItem(wallpaperKey(convId));
+          applyWallpaper(convId);
+          closeModal(overlay);
+        },
+      })
+    )
   );
 }
 

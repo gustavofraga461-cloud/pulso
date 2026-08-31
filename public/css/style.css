@@ -1388,6 +1388,27 @@ textarea {
   font-size: 13px;
 }
 
+/* indicador de "digitando" com bolinhas animadas */
+.typing-bubble {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: typingBounce 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
 /* mensagem apagada */
 .bubble.deleted {
   background: transparent;
@@ -1408,6 +1429,119 @@ textarea {
 .msg-deleted-ico svg {
   width: 14px;
   height: 14px;
+}
+
+/* foto de capa do perfil */
+.profile-cover {
+  height: 120px;
+  margin: -20px -20px 0;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--panel-2);
+  border-radius: var(--radius) var(--radius) 0 0;
+  position: relative;
+}
+.cover-edit {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s ease;
+}
+.cover-edit:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+.cover-edit .avatar-edit-ico svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* interruptor de sons */
+.sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  width: 100%;
+}
+.sound-toggle-knob {
+  width: 38px;
+  height: 22px;
+  border-radius: 20px;
+  background: var(--border-2);
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+.sound-toggle-knob::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+.sound-toggle.active .sound-toggle-knob {
+  background: var(--accent-grad);
+}
+.sound-toggle.active .sound-toggle-knob::after {
+  transform: translateX(16px);
+}
+.sound-toggle-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.sound-toggle.active .sound-toggle-label {
+  color: var(--text);
+}
+
+/* papel de parede da conversa */
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.wallpaper-swatch {
+  height: 74px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.wallpaper-swatch:hover {
+  transform: translateY(-1px);
+}
+.wallpaper-swatch.active {
+  border-color: var(--accent);
+}
+.wallpaper-swatch-label {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.6), transparent);
+  text-align: left;
 }
 
 /* ============ Temas (seletor) ============ */

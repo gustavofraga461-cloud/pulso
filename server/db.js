@@ -85,6 +85,7 @@ function ensureColumn(table, column, definition) {
 }
 ensureColumn('messages', 'deleted', "INTEGER NOT NULL DEFAULT 0");
 ensureColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'cover', "TEXT NOT NULL DEFAULT ''");
 
 function now() {
   return Date.now();
@@ -102,6 +103,7 @@ function sanitizeUser(row) {
     displayName: row.display_name,
     bio: row.bio || '',
     avatar: row.avatar || '',
+    cover: row.cover || '',
     online: !!row.online,
     lastSeen: Number(row.last_seen || 0),
     isBot: !!row.is_bot,
@@ -178,6 +180,10 @@ function updateUser(userId, fields) {
   if (fields.avatar !== undefined) {
     sets.push('avatar = ?');
     args.push(fields.avatar);
+  }
+  if (fields.cover !== undefined) {
+    sets.push('cover = ?');
+    args.push(fields.cover);
   }
   if (!sets.length) return getUserById(userId);
   args.push(Number(userId));
@@ -315,6 +321,7 @@ function getConversation(id) {
       username: u ? u.username : '',
       displayName: u ? u.displayName : 'Usuário removido',
       avatar: u ? u.avatar : '',
+      cover: u ? u.cover : '',
       bio: u ? u.bio : '',
       online: u ? u.online : false,
       lastSeen: u ? u.lastSeen : 0,
