@@ -10,6 +10,7 @@ const App = {
   loadingOlder: {},
   activeConvId: null,
   typing: {}, // convId -> Map(userId -> timer)
+  replyingTo: null, // { id, senderName, type, content } — mensagem sendo respondida na conversa aberta
   searchQuery: '',
   userResults: [],
   notifications: [],
@@ -297,6 +298,14 @@ function showApp() {
       el('div', { class: 'messages', id: 'messages' }),
       el('div', { class: 'composer' },
         el('div', { class: 'typing-banner', id: 'typingBanner', hidden: true }),
+        el('div', { class: 'reply-preview', id: 'replyPreview', hidden: true },
+          el('div', { class: 'reply-preview-bar' }),
+          el('div', { class: 'reply-preview-body' },
+            el('div', { class: 'reply-preview-name', id: 'replyPreviewName' }),
+            el('div', { class: 'reply-preview-text', id: 'replyPreviewText' })
+          ),
+          el('button', { class: 'icon-btn', id: 'btnCancelReply', html: ICONS.close })
+        ),
         el('div', { class: 'composer-row' },
           el('div', { class: 'emoji-wrap' },
             el('button', { class: 'icon-btn', id: 'btnEmoji', title: 'Emojis', html: ICONS.emoji }),
@@ -438,6 +447,15 @@ function connectSocket() {
 
   socket.on('connect_error', () => {
     toast('Conexão em tempo real indisponível. Reconectando...', 'error');
+  });
+  socket.on('disconnect', () => showConnectionBanner(true));
+  socket.on('connect', () => {
+    showConnectionBanner(false);
+    if (App.hasConnectedOnce) {
+      loadConversations();
+      if (App.activeConvId) loadMessages(App.activeConvId);
+    }
+    App.hasConnectedOnce = true;
   });
 
   socket.on('message:new', handleMessageNew);
@@ -613,6 +631,7 @@ async function openConversation(convId, opts = {}) {
   }
   App.activeConvId = convId;
   App.emojiOpen = false;
+  clearReplyTarget();
   const picker = document.getElementById('emojiPicker');
   if (picker) picker.hidden = true;
 
@@ -745,7 +764,16 @@ function messageDom(msg, conv) {
 
   if (!mine && conv.type === 'group' && !msg.deleted) {
     const sender = msg.sender || {};
-    bubbleChildren.push(el('div', { class: 'msg-sender', style: `color:${senderColor(msg.senderId)}`, text: sender.displayName || '?' }));
+    bubbleChildren.push(el('div', { class: 'msg-sender', style: `color:${senderColor(msg.senderId)}`, text: sender.displayName || 'Usuário removido' }));
+  }
+
+  if (msg.replyTo && !msg.deleted) {
+    bubbleChildren.push(
+      el('div', { class: 'msg-reply-quote' },
+        el('div', { class: 'msg-reply-quote-name', text: msg.replyTo.senderName }),
+        el('div', { class: 'msg-reply-quote-text', text: replyPreviewText(msg.replyTo) })
+      )
+    );
   }
 
   if (msg.deleted) {
@@ -777,14 +805,14 @@ function messageDom(msg, conv) {
     'data-day': startOfDay(msg.createdAt),
   }, bubble);
 
-  if (!msg.deleted && canDeleteMessage(msg, conv)) {
-    attachDeleteGesture(row, msg, conv);
+  if (!msg.deleted && msg.type !== 'system') {
+    attachMessageGesture(row, msg, conv);
   }
 
   return row;
 }
 
-// ---------- apagar mensagem para todos ----------
+// ---------- ações da mensagem (responder / apagar) ----------
 function canDeleteMessage(msg, conv) {
   if (!msg || msg.type === 'system' || msg.deleted) return false;
   if (msg.senderId === App.me.id) return true;
@@ -792,10 +820,10 @@ function canDeleteMessage(msg, conv) {
   return !!(conv && conv.type === 'group' && meMember && meMember.isAdmin);
 }
 
-function attachDeleteGesture(row, msg, conv) {
+function attachMessageGesture(row, msg, conv) {
   let pressTimer = null;
   const start = () => {
-    pressTimer = setTimeout(() => openDeleteMessageMenu(msg, conv), 480);
+    pressTimer = setTimeout(() => openMessageActions(msg, conv), 480);
   };
   const cancel = () => {
     if (pressTimer) clearTimeout(pressTimer);
@@ -807,37 +835,74 @@ function attachDeleteGesture(row, msg, conv) {
   row.addEventListener('touchcancel', cancel);
   row.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    openDeleteMessageMenu(msg, conv);
+    openMessageActions(msg, conv);
   });
 }
 
-function openDeleteMessageMenu(msg, conv) {
+function openMessageActions(msg, conv) {
   const { overlay, box } = modal(
     el('div', { class: 'modal-head' },
-      el('h3', { class: 'modal-title', text: 'Apagar mensagem' }),
+      el('h3', { class: 'modal-title', text: 'Mensagem' }),
       el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
     )
   );
-  box.append(
-    el('div', { class: 'modal-body' },
-      el('p', { text: 'Apagar essa mensagem para todos os participantes da conversa? Ela vai virar "Mensagem apagada" para todo mundo. Essa ação não pode ser desfeita.' })
-    ),
-    el('div', { class: 'modal-footer' },
-      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
-      el('button', {
-        class: 'btn btn-danger btn-block', text: 'Apagar para todos',
-        onclick: async () => {
-          try {
-            const { message } = await API.deleteMessage(conv.id, msg.id);
-            handleMessageDeleted(message);
-            closeModal(overlay);
-          } catch (err) {
-            toast(err.message, 'error');
-          }
-        },
-      })
-    )
-  );
+  const buttons = [
+    el('button', {
+      class: 'btn btn-block', text: '↩️ Responder',
+      onclick: () => {
+        setReplyTarget(msg);
+        closeModal(overlay);
+      },
+    }),
+  ];
+  if (canDeleteMessage(msg, conv)) {
+    buttons.push(el('button', {
+      class: 'btn btn-danger btn-block', text: '🗑️ Apagar para todos',
+      onclick: async () => {
+        try {
+          const { message } = await API.deleteMessage(conv.id, msg.id);
+          handleMessageDeleted(message);
+          closeModal(overlay);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      },
+    }));
+  }
+  box.append(el('div', { class: 'modal-footer' }, ...buttons));
+}
+
+// ---------- responder mensagem ----------
+function replyPreviewText(msg) {
+  if (!msg) return '';
+  if (msg.type === 'image') return '📷 Foto';
+  if (msg.type === 'audio') return '🎤 Áudio';
+  return msg.content || '';
+}
+
+function setReplyTarget(msg) {
+  const sender = msg.senderId === App.me.id ? 'Você' : (msg.sender ? msg.sender.displayName : memberName(App.activeConvId, msg.senderId));
+  App.replyingTo = { id: msg.id, senderName: sender, type: msg.type, content: msg.content };
+  renderReplyPreview();
+  const input = document.getElementById('msgInput');
+  if (input) input.focus();
+}
+
+function clearReplyTarget() {
+  App.replyingTo = null;
+  renderReplyPreview();
+}
+
+function renderReplyPreview() {
+  const bar = document.getElementById('replyPreview');
+  if (!bar) return;
+  if (!App.replyingTo) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  document.getElementById('replyPreviewName').textContent = App.replyingTo.senderName;
+  document.getElementById('replyPreviewText').textContent = replyPreviewText(App.replyingTo);
 }
 
 function handleMessageDeleted(msg) {
@@ -982,6 +1047,9 @@ async function sendTextMessage() {
   autoResize(input);
   updateComposerButtons();
 
+  const replyTarget = App.replyingTo;
+  clearReplyTarget();
+
   const tempId = 'local-' + Date.now();
   const temp = {
     id: tempId,
@@ -991,6 +1059,7 @@ async function sendTextMessage() {
     content,
     createdAt: Date.now(),
     status: 'sent',
+    replyTo: replyTarget ? { senderName: replyTarget.senderName, type: replyTarget.type, content: replyTarget.content } : null,
     sender: { id: App.me.id, username: App.me.username, displayName: App.me.displayName, avatar: App.me.avatar },
   };
   App.messages[App.activeConvId].push(temp);
@@ -998,7 +1067,7 @@ async function sendTextMessage() {
   playSentSound();
 
   try {
-    const { message } = await API.sendMessage(App.activeConvId, 'text', content);
+    const { message } = await API.sendMessage(App.activeConvId, 'text', content, replyTarget ? replyTarget.id : undefined);
     if (message) {
       const idx = App.messages[App.activeConvId].indexOf(temp);
       if (idx >= 0) {
@@ -1020,8 +1089,10 @@ async function sendTextMessage() {
 
 async function sendMediaMessage(type, content) {
   if (!App.activeConvId) return;
+  const replyTarget = App.replyingTo;
+  clearReplyTarget();
   try {
-    const { message } = await API.sendMessage(App.activeConvId, type, content);
+    const { message } = await API.sendMessage(App.activeConvId, type, content, replyTarget ? replyTarget.id : undefined);
     playSentSound();
     if (message) {
       if (!App.messages[App.activeConvId]) App.messages[App.activeConvId] = [];
@@ -1340,6 +1411,8 @@ function wireShellEvents() {
 
   document.getElementById('chatPeerBtn').addEventListener('click', openChatInfo);
 
+  document.getElementById('btnCancelReply').addEventListener('click', clearReplyTarget);
+
   document.getElementById('btnEmoji').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleEmojiPicker();
@@ -1355,7 +1428,9 @@ function wireShellEvents() {
     }
     toast('Enviando imagem...');
     try {
-      const { url } = await API.upload(file);
+      const dataUrl = await resizeImageFile(file, 1600, 0.8);
+      const blob = dataUrlToBlob(dataUrl);
+      const { url } = await API.upload(blob, 'foto.jpg');
       await sendMediaMessage('image', url);
     } catch (err) {
       toast(err.message, 'error');
@@ -1774,6 +1849,51 @@ function openPrivateInfo(conv) {
   if (peerFull.cover) {
     box.append(el('div', { class: 'profile-cover', style: `background-image:url('${peerFull.cover}')` }));
   }
+  const footerButtons = [
+    el('button', {
+      class: 'btn btn-primary btn-block', text: 'Enviar mensagem',
+      onclick: () => { closeModal(overlay); openConversation(conv.id); },
+    }),
+    el('button', {
+      class: 'btn btn-block', text: '🖼️ Papel de parede da conversa',
+      onclick: () => openWallpaperPicker(conv.id),
+    }),
+  ];
+
+  if (!peer.isBot) {
+    const blockBtn = el('button', { class: 'btn btn-block', text: 'Bloquear usuário' });
+    blockBtn.addEventListener('click', async () => {
+      try {
+        const { blockedByMe } = await API.getBlockStatus(peer.id);
+        if (blockedByMe) {
+          await API.unblockUser(peer.id);
+          toast('Usuário desbloqueado');
+          blockBtn.textContent = 'Bloquear usuário';
+        } else {
+          await API.blockUser(peer.id);
+          toast('Usuário bloqueado');
+          blockBtn.textContent = 'Desbloquear usuário';
+        }
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+    API.getBlockStatus(peer.id).then(({ blockedByMe }) => {
+      if (blockedByMe) blockBtn.textContent = 'Desbloquear usuário';
+    }).catch(() => {});
+    footerButtons.push(blockBtn);
+
+    footerButtons.push(el('button', {
+      class: 'btn btn-block', text: 'Denunciar usuário',
+      onclick: () => openReportModal(peer.id),
+    }));
+  }
+
+  footerButtons.push(el('button', {
+    class: 'btn btn-danger btn-block', text: 'Apagar conversa',
+    onclick: () => confirmDeleteConversation(conv, overlay),
+  }));
+
   box.append(
     el('div', { class: 'profile-hero' },
       el('div', { class: 'profile-avatar' }, avatarEl(peerFull, 96, { showOnline: true, online: peer.online })),
@@ -1782,18 +1902,40 @@ function openPrivateInfo(conv) {
       el('div', { class: 'profile-status', text: formatLastSeen(peer.lastSeen, peer.online) })
     ),
     peerFull.bio ? el('div', { class: 'profile-bio', text: peerFull.bio }) : el('div', { class: 'profile-bio muted', text: 'Sem bio.' }),
+    el('div', { class: 'modal-footer' }, ...footerButtons)
+  );
+}
+
+function openReportModal(userId) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Denunciar usuário' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  const textarea = el('textarea', {
+    class: 'input',
+    rows: 4,
+    placeholder: 'Descreva o motivo da denúncia (opcional)...',
+    style: 'width:100%;resize:vertical;',
+  });
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('p', { text: 'Nossa equipe vai analisar essa denúncia. Isso não bloqueia o usuário automaticamente — se quiser, bloqueie separadamente.' }),
+      textarea
+    ),
     el('div', { class: 'modal-footer' },
       el('button', {
-        class: 'btn btn-primary btn-block', text: 'Enviar mensagem',
-        onclick: () => { closeModal(overlay); openConversation(conv.id); },
-      }),
-      el('button', {
-        class: 'btn btn-block', text: '🖼️ Papel de parede da conversa',
-        onclick: () => openWallpaperPicker(conv.id),
-      }),
-      el('button', {
-        class: 'btn btn-danger btn-block', text: 'Apagar conversa',
-        onclick: () => confirmDeleteConversation(conv, overlay),
+        class: 'btn btn-danger btn-block', text: 'Enviar denúncia',
+        onclick: async () => {
+          try {
+            await API.reportUser(userId, textarea.value.trim());
+            toast('Denúncia enviada. Obrigado por avisar.');
+            closeModal(overlay);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
       })
     )
   );
@@ -2097,7 +2239,41 @@ function openSettingsModal() {
     buildThemePicker(),
     buildSoundToggle(),
     el('div', { class: 'modal-footer settings-logout' },
-      el('button', { class: 'btn btn-danger btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } })
+      el('button', { class: 'btn btn-danger btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } }),
+      el('button', {
+        class: 'btn btn-block danger-outline', text: 'Excluir minha conta',
+        onclick: () => { closeModal(overlay); confirmDeleteAccount(); },
+      })
+    )
+  );
+}
+
+function confirmDeleteAccount() {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Excluir conta' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('p', { text: 'Isso apaga permanentemente sua conta e seu perfil. Suas mensagens já enviadas continuam visíveis para quem ficou nas conversas, mas aparecerão como enviadas por "Usuário removido". Essa ação não pode ser desfeita.' })
+    ),
+    el('div', { class: 'modal-footer' },
+      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
+      el('button', {
+        class: 'btn btn-danger btn-block', text: 'Excluir minha conta definitivamente',
+        onclick: async () => {
+          try {
+            await API.deleteMyAccount();
+            closeModal(overlay);
+            toast('Conta excluída.');
+            logout();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
     )
   );
 }
@@ -2248,6 +2424,16 @@ function applyWallpaper(convId) {
   }
 }
 
+function dataUrlToBlob(dataUrl) {
+  const [header, base64] = dataUrl.split(',');
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 function resizeImageFile(file, maxDim, quality) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2338,6 +2524,15 @@ function openWallpaperPicker(convId) {
       })
     )
   );
+}
+
+function showConnectionBanner(show) {
+  let banner = document.getElementById('connBanner');
+  if (!banner) {
+    banner = el('div', { id: 'connBanner', class: 'conn-banner', text: '📶 Sem conexão — reconectando...' });
+    document.body.appendChild(banner);
+  }
+  banner.classList.toggle('show', show);
 }
 
 // ---------- logout ----------

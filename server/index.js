@@ -21,6 +21,7 @@ const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
+app.set('trust proxy', true); // Render fica atrás de um proxy; sem isso, req.ip vem errado
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
@@ -88,16 +89,45 @@ app.post('/api/auth/signup', (req, res) => {
   res.status(201).json({ token, user });
 });
 
+// ---------- limite de tentativas de login (evita força bruta de senha) ----------
+const loginAttempts = new Map(); // chave: ip+username -> { count, blockedUntil }
+const LOGIN_MAX_ATTEMPTS = 6;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000; // 10 minutos
+
+function loginAttemptKey(req, username) {
+  return `${req.ip}:${username.toLowerCase()}`;
+}
+
 app.post('/api/auth/login', (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
+  const key = loginAttemptKey(req, username);
+  const entry = loginAttempts.get(key);
+
+  if (entry && entry.blockedUntil && entry.blockedUntil > Date.now()) {
+    const waitMin = Math.ceil((entry.blockedUntil - Date.now()) / 60000);
+    return res.status(429).json({
+      error: 'muitas_tentativas',
+      message: `Muitas tentativas de login. Tente novamente em ${waitMin} minuto(s).`,
+    });
+  }
+
   const result = db.verifyPassword(username, password);
   if (!result.ok) {
+    const fresh = entry && entry.windowStart > Date.now() - LOGIN_WINDOW_MS ? entry : { count: 0, windowStart: Date.now() };
+    fresh.count += 1;
+    if (fresh.count >= LOGIN_MAX_ATTEMPTS) {
+      fresh.blockedUntil = Date.now() + LOGIN_WINDOW_MS;
+    }
+    loginAttempts.set(key, fresh);
+
     if (result.reason === 'not_found') {
       return res.status(401).json({ error: 'usuario_nao_encontrado', message: 'Usuário não encontrado. Verifique o nome de usuário ou crie uma conta.' });
     }
     return res.status(401).json({ error: 'senha_incorreta', message: 'Senha incorreta. Tente novamente.' });
   }
+
+  loginAttempts.delete(key);
   const token = db.createSession(result.user.id);
   res.json({ token, user: result.user });
 });
@@ -132,6 +162,44 @@ app.put('/api/users/me', authRequired, (req, res) => {
   if (req.body.cover !== undefined) fields.cover = String(req.body.cover);
   const user = db.updateUser(req.user.id, fields);
   res.json({ user });
+});
+
+app.delete('/api/users/me', authRequired, (req, res) => {
+  const userId = req.user.id;
+  db.deleteSession(req.token);
+  db.deleteAccount(userId);
+  io.emit('user:deleted', { userId });
+  res.json({ ok: true });
+});
+
+app.post('/api/users/:id/block', authRequired, (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!targetId || targetId === req.user.id) return res.status(400).json({ error: 'alvo_invalido' });
+  const target = db.getUserById(targetId);
+  if (!target) return res.status(404).json({ error: 'usuario_nao_encontrado' });
+  db.blockUser(req.user.id, targetId);
+  res.json({ ok: true });
+});
+
+app.post('/api/users/:id/unblock', authRequired, (req, res) => {
+  const targetId = Number(req.params.id);
+  db.unblockUser(req.user.id, targetId);
+  res.json({ ok: true });
+});
+
+app.get('/api/users/:id/blocked', authRequired, (req, res) => {
+  const targetId = Number(req.params.id);
+  res.json({ blockedByMe: db.isBlocked(req.user.id, targetId), blockedMe: db.isBlocked(targetId, req.user.id) });
+});
+
+app.post('/api/users/:id/report', authRequired, (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!targetId || targetId === req.user.id) return res.status(400).json({ error: 'alvo_invalido' });
+  const target = db.getUserById(targetId);
+  if (!target) return res.status(404).json({ error: 'usuario_nao_encontrado' });
+  const reason = String(req.body.reason || '').trim().slice(0, 500);
+  db.addReport(req.user.id, targetId, reason);
+  res.json({ ok: true });
 });
 
 // ---------- REST: conversations ----------
@@ -269,11 +337,24 @@ app.get('/api/conversations/:id/messages', authRequired, (req, res) => {
 app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
   const conv = db.getConversation(req.params.id);
   if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+
+  if (conv.type === 'private') {
+    const peerMember = conv.members.find((m) => m.userId !== req.user.id);
+    if (peerMember && db.isBlockedEitherWay(req.user.id, peerMember.userId)) {
+      return res.status(403).json({ error: 'bloqueado', message: 'Não é possível enviar mensagens nessa conversa.' });
+    }
+  }
+
   const type = req.body.type === 'image' || req.body.type === 'audio' ? req.body.type : 'text';
   const content = String(req.body.content || '').trim().slice(0, 5000);
   if (!content) return res.status(400).json({ error: 'conteudo_vazio' });
+  let replyToId = req.body.replyToId ? Number(req.body.replyToId) : null;
+  if (replyToId) {
+    const original = db.getMessage(replyToId);
+    if (!original || Number(original.conversation_id) !== conv.id) replyToId = null;
+  }
 
-  const messageId = db.addMessage(conv.id, req.user.id, type, content);
+  const messageId = db.addMessage(conv.id, req.user.id, type, content, replyToId);
   markDeliveredForOnline(conv, messageId);
   const payload = db.getLastMessage(conv.id);
   if (payload) io.to(`conv:${conv.id}`).emit('message:new', payload);

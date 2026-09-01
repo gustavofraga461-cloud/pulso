@@ -109,8 +109,8 @@ const API = {
     const q = beforeId ? `?beforeId=${beforeId}&limit=${limit}` : `?limit=${limit}`;
     return this.get(`/api/conversations/${conversationId}/messages${q}`);
   },
-  sendMessage(conversationId, type, content) {
-    return this.post(`/api/conversations/${conversationId}/messages`, { type, content });
+  sendMessage(conversationId, type, content, replyToId) {
+    return this.post(`/api/conversations/${conversationId}/messages`, { type, content, replyToId });
   },
   markRead(conversationId, messageId) {
     return this.post(`/api/conversations/${conversationId}/read`, { messageId });
@@ -130,9 +130,25 @@ const API = {
   deleteConversation(conversationId) {
     return this.request('DELETE', `/api/conversations/${conversationId}`);
   },
-  upload(file) {
+  blockUser(userId) {
+    return this.post(`/api/users/${userId}/block`);
+  },
+  unblockUser(userId) {
+    return this.post(`/api/users/${userId}/unblock`);
+  },
+  getBlockStatus(userId) {
+    return this.get(`/api/users/${userId}/blocked`);
+  },
+  reportUser(userId, reason) {
+    return this.post(`/api/users/${userId}/report`, { reason });
+  },
+  deleteMyAccount() {
+    return this.request('DELETE', '/api/users/me');
+  },
+  upload(file, filename) {
     const fd = new FormData();
-    fd.append('file', file);
+    if (filename) fd.append('file', file, filename);
+    else fd.append('file', file);
     return this.post('/api/upload', fd);
   },
 

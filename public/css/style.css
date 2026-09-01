@@ -189,6 +189,15 @@ textarea {
 .btn-danger:hover {
   background: rgba(255, 92, 108, 0.2);
 }
+.danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid rgba(255, 92, 108, 0.3);
+  margin-top: 8px;
+}
+.danger-outline:hover {
+  background: var(--danger-soft);
+}
 .btn-sm {
   padding: 7px 12px;
   font-size: 12.5px;
@@ -1409,6 +1418,61 @@ textarea {
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
+/* citação de resposta dentro do balão */
+.msg-reply-quote {
+  border-left: 3px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  max-width: 100%;
+}
+.msg-reply-quote-name {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent-2);
+}
+.msg-reply-quote-text {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* barra de "respondendo a" no composer */
+.reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+}
+.reply-preview-bar {
+  width: 3px;
+  align-self: stretch;
+  background: var(--accent);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.reply-preview-body {
+  flex: 1;
+  min-width: 0;
+}
+.reply-preview-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-2);
+}
+.reply-preview-text {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* mensagem apagada */
 .bubble.deleted {
   background: transparent;
@@ -1542,6 +1606,25 @@ textarea {
   color: #fff;
   background: linear-gradient(0deg, rgba(0, 0, 0, 0.6), transparent);
   text-align: left;
+}
+
+/* banner de reconexão */
+.conn-banner {
+  position: fixed;
+  top: -50px;
+  left: 0;
+  right: 0;
+  z-index: 500;
+  text-align: center;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--danger);
+  color: #fff;
+  transition: top 0.25s ease;
+}
+.conn-banner.show {
+  top: 0;
 }
 
 /* ============ Temas (seletor) ============ */

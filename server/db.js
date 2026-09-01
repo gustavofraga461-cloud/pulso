@@ -73,6 +73,21 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
+  CREATE TABLE IF NOT EXISTS blocked_users (
+    blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (blocker_id, blocked_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reported_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Migração leve: adiciona colunas novas em bancos já existentes (ex: no Render)
@@ -86,6 +101,7 @@ function ensureColumn(table, column, definition) {
 ensureColumn('messages', 'deleted', "INTEGER NOT NULL DEFAULT 0");
 ensureColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'cover', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('messages', 'reply_to_id', 'INTEGER');
 
 function now() {
   return Date.now();
@@ -359,12 +375,19 @@ function updateConversation(conversationId, fields) {
   return getConversation(conversationId);
 }
 
-function addMessage(conversationId, senderId, type, content) {
+function addMessage(conversationId, senderId, type, content, replyToId) {
   const info = db
     .prepare(
-      'INSERT INTO messages (conversation_id, sender_id, type, content, delivered, created_at) VALUES (?, ?, ?, ?, 0, ?)'
+      'INSERT INTO messages (conversation_id, sender_id, type, content, delivered, reply_to_id, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)'
     )
-    .run(Number(conversationId), senderId ? Number(senderId) : null, type, content, now());
+    .run(
+      Number(conversationId),
+      senderId ? Number(senderId) : null,
+      type,
+      content,
+      replyToId ? Number(replyToId) : null,
+      now()
+    );
   return Number(info.lastInsertRowid);
 }
 
@@ -374,6 +397,45 @@ function getMessage(id) {
 
 function deleteMessageForEveryone(messageId) {
   db.prepare("UPDATE messages SET deleted = 1, content = '' WHERE id = ?").run(Number(messageId));
+}
+
+// ---------- bloqueio e denúncia ----------
+function blockUser(blockerId, blockedId) {
+  db.prepare(
+    'INSERT OR IGNORE INTO blocked_users (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)'
+  ).run(Number(blockerId), Number(blockedId), now());
+}
+
+function unblockUser(blockerId, blockedId) {
+  db.prepare('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?').run(
+    Number(blockerId),
+    Number(blockedId)
+  );
+}
+
+function isBlocked(blockerId, blockedId) {
+  const row = db
+    .prepare('SELECT 1 FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?')
+    .get(Number(blockerId), Number(blockedId));
+  return !!row;
+}
+
+// true se qualquer um dos dois bloqueou o outro (bloqueio impede a conversa nos dois sentidos)
+function isBlockedEitherWay(userA, userB) {
+  return isBlocked(userA, userB) || isBlocked(userB, userA);
+}
+
+function addReport(reporterId, reportedId, reason) {
+  db.prepare(
+    'INSERT INTO reports (reporter_id, reported_id, reason, created_at) VALUES (?, ?, ?, ?)'
+  ).run(Number(reporterId), Number(reportedId), String(reason || ''), now());
+}
+
+function deleteAccount(userId) {
+  // ON DELETE CASCADE/SET NULL nas foreign keys já cuidam de sessões, participações
+  // em conversas, inscrições push e bloqueios; mensagens enviadas ficam com sender_id
+  // nulo (aparecem como "Usuário removido") em vez de sumir do histórico de quem ficou.
+  db.prepare('DELETE FROM users WHERE id = ?').run(Number(userId));
 }
 
 function markDelivered(conversationId, upToId) {
@@ -401,6 +463,19 @@ function computeStatus(message, conversation) {
 
 function buildMessagePayload(message, conversation) {
   const sender = message.sender_id ? getUserById(message.sender_id) : null;
+  let replyTo = null;
+  if (message.reply_to_id) {
+    const original = getMessage(message.reply_to_id);
+    if (original) {
+      const originalSender = original.sender_id ? getUserById(original.sender_id) : null;
+      replyTo = {
+        id: Number(original.id),
+        senderName: originalSender ? originalSender.displayName : 'Usuário removido',
+        type: original.type,
+        content: original.deleted ? 'Mensagem apagada' : original.content,
+      };
+    }
+  }
   return {
     id: Number(message.id),
     conversationId: Number(message.conversation_id),
@@ -411,6 +486,7 @@ function buildMessagePayload(message, conversation) {
     createdAt: Number(message.created_at),
     delivered: !!message.delivered,
     status: computeStatus(message, conversation),
+    replyTo,
     sender: sender
       ? { id: sender.id, username: sender.username, displayName: sender.displayName, avatar: sender.avatar }
       : null,
@@ -559,4 +635,10 @@ module.exports = {
   deletePushSubscription,
   deletePushSubscriptionsByUser,
   getPushSubscriptionsByUser,
+  blockUser,
+  unblockUser,
+  isBlocked,
+  isBlockedEitherWay,
+  addReport,
+  deleteAccount,
 };
