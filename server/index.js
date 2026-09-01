@@ -414,6 +414,61 @@ app.delete('/api/conversations/:id/messages/:messageId', authRequired, (req, res
   res.json({ message: payload });
 });
 
+app.put('/api/conversations/:id/messages/:messageId', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  const message = db.getMessage(req.params.messageId);
+  if (!message || Number(message.conversation_id) !== conv.id) {
+    return res.status(404).json({ error: 'mensagem_nao_encontrada' });
+  }
+  if (!message.sender_id || Number(message.sender_id) !== req.user.id) {
+    return res.status(403).json({ error: 'sem_permissao' });
+  }
+  if (message.type !== 'text' || message.deleted) {
+    return res.status(400).json({ error: 'operacao_invalida' });
+  }
+  const content = String(req.body.content || '').trim().slice(0, 5000);
+  if (!content) return res.status(400).json({ error: 'conteudo_vazio' });
+
+  db.editMessage(message.id, content);
+  const payload = db.buildMessagePayload(db.getMessage(message.id), conv);
+  io.to(`conv:${conv.id}`).emit('message:edited', payload);
+  emitConversationUpdate(conv.id);
+  res.json({ message: payload });
+});
+
+app.put('/api/conversations/:id/messages/:messageId/reaction', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  const message = db.getMessage(req.params.messageId);
+  if (!message || Number(message.conversation_id) !== conv.id) {
+    return res.status(404).json({ error: 'mensagem_nao_encontrada' });
+  }
+  const emoji = String(req.body.emoji || '').trim().slice(0, 8);
+  if (emoji) {
+    db.setReaction(message.id, req.user.id, emoji);
+  } else {
+    db.removeReaction(message.id, req.user.id);
+  }
+  const payload = db.buildMessagePayload(db.getMessage(message.id), conv);
+  io.to(`conv:${conv.id}`).emit('message:reaction', payload);
+  res.json({ message: payload });
+});
+
+app.put('/api/conversations/:id/pin', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  db.setPinned(conv.id, req.user.id, !!req.body.pinned);
+  res.json({ ok: true });
+});
+
+app.put('/api/conversations/:id/mute', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  db.setMuted(conv.id, req.user.id, !!req.body.muted);
+  res.json({ ok: true });
+});
+
 app.post('/api/conversations/:id/read', authRequired, (req, res) => {
   const conv = db.getConversation(req.params.id);
   if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
@@ -457,6 +512,7 @@ function pushMessageToRecipients(conversation, payload, excludeUserId) {
   for (const member of conversation.members) {
     if (member.userId === Number(excludeUserId)) continue;
     if (presence.has(member.userId)) continue;
+    if (member.muted) continue;
     const subs = db.getPushSubscriptionsByUser(member.userId);
     for (const sub of subs) {
       push.sendPush(sub, {

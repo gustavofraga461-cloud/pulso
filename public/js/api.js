@@ -124,6 +124,18 @@ const API = {
   deleteMessage(conversationId, messageId) {
     return this.request('DELETE', `/api/conversations/${conversationId}/messages/${messageId}`);
   },
+  editMessage(conversationId, messageId, content) {
+    return this.request('PUT', `/api/conversations/${conversationId}/messages/${messageId}`, { content });
+  },
+  setReaction(conversationId, messageId, emoji) {
+    return this.request('PUT', `/api/conversations/${conversationId}/messages/${messageId}/reaction`, { emoji });
+  },
+  setPinned(conversationId, pinned) {
+    return this.request('PUT', `/api/conversations/${conversationId}/pin`, { pinned });
+  },
+  setMuted(conversationId, muted) {
+    return this.request('PUT', `/api/conversations/${conversationId}/mute`, { muted });
+  },
   leaveGroup(conversationId) {
     return this.post(`/api/conversations/${conversationId}/leave`);
   },

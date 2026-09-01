@@ -269,7 +269,7 @@ function showApp() {
         el('span', { class: 'newchat-ico', html: ICONS.plus }),
         el('span', { class: 'newchat-txt', text: 'Nova conversa ou grupo' })
       ),
-      el('nav', { class: 'conv-list', id: 'convList' })
+      el('nav', { class: 'conv-list', id: 'convList' }, ...skeletonConvItems(6))
     ),
     el('div', { class: 'sidebar-footer' },
       el('span', { class: 'footer-me', id: 'footerMe' }),
@@ -293,7 +293,15 @@ function showApp() {
             el('span', { class: 'chat-peer-status', id: 'chatPeerStatus' })
           )
         ),
+        el('button', { class: 'icon-btn', id: 'btnChatSearch', title: 'Buscar na conversa', html: ICONS.search }),
         el('button', { class: 'icon-btn', id: 'btnChatInfo', title: 'Detalhes', html: ICONS.info })
+      ),
+      el('div', { class: 'chat-search-bar', id: 'chatSearchBar', hidden: true },
+        el('input', { class: 'chat-search-input', id: 'chatSearchInput', type: 'text', placeholder: 'Buscar nesta conversa...' }),
+        el('span', { class: 'chat-search-count', id: 'chatSearchCount' }),
+        el('button', { class: 'icon-btn', id: 'btnSearchPrev', title: 'Anterior', html: ICONS.up || '▲' }),
+        el('button', { class: 'icon-btn', id: 'btnSearchNext', title: 'Próxima', html: ICONS.down || '▼' }),
+        el('button', { class: 'icon-btn', id: 'btnSearchClose', html: ICONS.close })
       ),
       el('div', { class: 'messages', id: 'messages' }),
       el('div', { class: 'composer' },
@@ -460,6 +468,8 @@ function connectSocket() {
 
   socket.on('message:new', handleMessageNew);
   socket.on('message:deleted', handleMessageDeleted);
+  socket.on('message:edited', handleMessageUpdated);
+  socket.on('message:reaction', handleMessageUpdated);
   socket.on('read', handleRead);
   socket.on('typing', handleTyping);
   socket.on('presence', handlePresence);
@@ -471,12 +481,43 @@ function connectSocket() {
   });
 }
 
+// ---------- skeleton loading ----------
+function skeletonConvItems(n) {
+  const items = [];
+  for (let i = 0; i < n; i++) {
+    items.push(
+      el('div', { class: 'conv-item skeleton-item' },
+        el('div', { class: 'skeleton-circle' }),
+        el('div', { class: 'conv-mid' },
+          el('div', { class: 'skeleton-line', style: `width:${55 + (i % 3) * 10}%` }),
+          el('div', { class: 'skeleton-line skeleton-line-sm', style: `width:${35 + (i % 4) * 8}%` })
+        )
+      )
+    );
+  }
+  return items;
+}
+
+function skeletonMessages() {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  container.innerHTML = '';
+  const sides = ['theirs', 'mine', 'theirs', 'theirs', 'mine'];
+  for (const side of sides) {
+    container.append(
+      el('div', { class: `msg ${side} skeleton-msg` },
+        el('div', { class: 'bubble skeleton-bubble', style: `width:${100 + Math.random() * 100}px` })
+      )
+    );
+  }
+}
+
 // ---------- conversations list ----------
 function sortConversations(list) {
+  const rank = (c) => (c.peer && c.peer.isBot ? 2 : c.pinned ? 1 : 0); // bot sempre primeiro, depois fixadas, depois o resto
   list.sort((a, b) => {
-    const aPinned = a.peer && a.peer.isBot ? 1 : 0;
-    const bPinned = b.peer && b.peer.isBot ? 1 : 0;
-    if (aPinned !== bPinned) return bPinned - aPinned;
+    const r = rank(b) - rank(a);
+    if (r !== 0) return r;
     return b.lastActivity - a.lastActivity;
   });
   return list;
@@ -541,7 +582,7 @@ function convItem(c, inSearch) {
   const typing = isTypingIn(c.id);
   const lastMsg = c.lastMessage;
   const isBotConv = !!(c.peer && c.peer.isBot);
-  const item = el('div', { class: 'conv-item' + (App.activeConvId === c.id ? ' active' : '') + (isBotConv ? ' pinned' : ''), 'data-id': c.id });
+  const item = el('div', { class: 'conv-item' + (App.activeConvId === c.id ? ' active' : '') + ((isBotConv || c.pinned) ? ' pinned' : ''), 'data-id': c.id });
 
   const peerForDot = c.type === 'private' && c.peer ? c.peer : null;
   item.append(
@@ -552,8 +593,10 @@ function convItem(c, inSearch) {
     ),
     el('div', { class: 'conv-mid' },
       el('div', { class: 'conv-name' },
+        c.pinned && !isBotConv ? el('span', { class: 'conv-pin-ico', text: '📌' }) : null,
         el('span', { class: 'conv-name-text', text: c.name }),
-        isBotConv ? el('span', { class: 'conv-bot-badge', text: 'IA' }) : null
+        isBotConv ? el('span', { class: 'conv-bot-badge', text: 'IA' }) : null,
+        c.muted ? el('span', { class: 'conv-mute-ico', text: '🔇' }) : null
       ),
       el('div', { class: 'conv-last' + (c.unread ? ' unread' : '') + (typing ? ' typing' : ''),
         text: typing ? 'digitando...' : messagePreviewText(lastMsg, App.me.id) })
@@ -567,7 +610,58 @@ function convItem(c, inSearch) {
   item.addEventListener('click', () => {
     openConversation(c.id);
   });
+
+  if (!inSearch && !isBotConv) {
+    let pressTimer = null;
+    const start = () => { pressTimer = setTimeout(() => openConvItemMenu(c), 480); };
+    const cancel = () => { if (pressTimer) clearTimeout(pressTimer); pressTimer = null; };
+    item.addEventListener('touchstart', start, { passive: true });
+    item.addEventListener('touchend', cancel);
+    item.addEventListener('touchmove', cancel);
+    item.addEventListener('touchcancel', cancel);
+    item.addEventListener('contextmenu', (e) => { e.preventDefault(); openConvItemMenu(c); });
+  }
   return item;
+}
+
+function openConvItemMenu(c) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: c.name }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.append(
+    el('div', { class: 'modal-footer' },
+      el('button', {
+        class: 'btn btn-block', text: c.pinned ? '📌 Desafixar conversa' : '📌 Fixar conversa',
+        onclick: async () => {
+          try {
+            await API.setPinned(c.id, !c.pinned);
+            c.pinned = !c.pinned;
+            sortConversations(App.conversations);
+            renderConversations();
+            closeModal(overlay);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      }),
+      el('button', {
+        class: 'btn btn-block', text: c.muted ? '🔔 Ativar notificações' : '🔇 Silenciar conversa',
+        onclick: async () => {
+          try {
+            await API.setMuted(c.id, !c.muted);
+            c.muted = !c.muted;
+            renderConversations();
+            closeModal(overlay);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
+    )
+  );
 }
 
 function userItem(u) {
@@ -632,6 +726,7 @@ async function openConversation(convId, opts = {}) {
   App.activeConvId = convId;
   App.emojiOpen = false;
   clearReplyTarget();
+  closeChatSearch();
   const picker = document.getElementById('emojiPicker');
   if (picker) picker.hidden = true;
 
@@ -663,8 +758,12 @@ async function openConversation(convId, opts = {}) {
   renderChatHeader();
   showChatView();
   applyWallpaper(convId);
-  if (!App.messages[convId]) App.messages[convId] = [];
-  renderMessages();
+  if (!App.messages[convId]) {
+    App.messages[convId] = [];
+    skeletonMessages();
+  } else {
+    renderMessages();
+  }
   loadMessages(convId);
 
   document.body.classList.add('view-chat');
@@ -793,17 +892,28 @@ function messageDom(msg, conv) {
 
   bubbleChildren.push(
     el('span', { class: 'msg-meta' },
+      msg.edited && !msg.deleted ? el('span', { class: 'msg-edited', text: 'editado' }) : null,
       el('span', { class: 'msg-time', text: formatClock(msg.createdAt) }),
       mine ? statusIconEl(msg) : null
     )
   );
 
   const bubble = el('div', { class: 'bubble' + (msg.deleted ? ' deleted' : '') }, ...bubbleChildren);
+
+  const wrapChildren = [bubble];
+  if (msg.reactions && msg.reactions.length && !msg.deleted) {
+    const chip = el('div', { class: 'reaction-chip' + (mine ? ' mine' : '') });
+    for (const r of msg.reactions) {
+      chip.append(el('span', { class: 'reaction-chip-item', text: r.userIds.length > 1 ? `${r.emoji} ${r.userIds.length}` : r.emoji }));
+    }
+    wrapChildren.push(chip);
+  }
+
   const row = el('div', {
-    class: `msg ${mine ? 'mine' : 'theirs'} ${msg.type}` + (msg.deleted ? ' deleted' : ''),
+    class: `msg ${mine ? 'mine' : 'theirs'} ${msg.type}` + (msg.deleted ? ' deleted' : '') + (msg.reactions && msg.reactions.length ? ' has-reactions' : ''),
     'data-mid': msg.id,
     'data-day': startOfDay(msg.createdAt),
-  }, bubble);
+  }, ...wrapChildren);
 
   if (!msg.deleted && msg.type !== 'system') {
     attachMessageGesture(row, msg, conv);
@@ -839,6 +949,8 @@ function attachMessageGesture(row, msg, conv) {
   });
 }
 
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
 function openMessageActions(msg, conv) {
   const { overlay, box } = modal(
     el('div', { class: 'modal-head' },
@@ -846,6 +958,27 @@ function openMessageActions(msg, conv) {
       el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
     )
   );
+
+  const myReaction = (msg.reactions || []).find((r) => r.userIds.includes(App.me.id));
+  const reactionRow = el('div', { class: 'reaction-picker' });
+  for (const emoji of QUICK_REACTIONS) {
+    const active = myReaction && myReaction.emoji === emoji;
+    reactionRow.append(el('button', {
+      class: 'reaction-picker-btn' + (active ? ' active' : ''),
+      type: 'button',
+      text: emoji,
+      onclick: async () => {
+        try {
+          const { message } = await API.setReaction(conv.id, msg.id, active ? '' : emoji);
+          handleMessageUpdated(message);
+          closeModal(overlay);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      },
+    }));
+  }
+
   const buttons = [
     el('button', {
       class: 'btn btn-block', text: '↩️ Responder',
@@ -855,6 +988,15 @@ function openMessageActions(msg, conv) {
       },
     }),
   ];
+  if (msg.senderId === App.me.id && msg.type === 'text' && !msg.deleted) {
+    buttons.push(el('button', {
+      class: 'btn btn-block', text: '✏️ Editar',
+      onclick: () => {
+        closeModal(overlay);
+        openEditMessageModal(msg, conv);
+      },
+    }));
+  }
   if (canDeleteMessage(msg, conv)) {
     buttons.push(el('button', {
       class: 'btn btn-danger btn-block', text: '🗑️ Apagar para todos',
@@ -869,7 +1011,43 @@ function openMessageActions(msg, conv) {
       },
     }));
   }
-  box.append(el('div', { class: 'modal-footer' }, ...buttons));
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('div', { class: 'reaction-picker-label', text: 'Reagir' }),
+      reactionRow
+    ),
+    el('div', { class: 'modal-footer' }, ...buttons)
+  );
+}
+
+function openEditMessageModal(msg, conv) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Editar mensagem' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  const textarea = el('textarea', { class: 'input', rows: 4, style: 'width:100%;resize:vertical;', text: msg.content });
+  box.append(
+    el('div', { class: 'modal-body' }, textarea),
+    el('div', { class: 'modal-footer' },
+      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
+      el('button', {
+        class: 'btn btn-primary btn-block', text: 'Salvar',
+        onclick: async () => {
+          const content = textarea.value.trim();
+          if (!content) return;
+          try {
+            const { message } = await API.editMessage(conv.id, msg.id, content);
+            handleMessageUpdated(message);
+            closeModal(overlay);
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
+    )
+  );
 }
 
 // ---------- responder mensagem ----------
@@ -917,6 +1095,11 @@ function handleMessageDeleted(msg) {
   }
   if (App.activeConvId === msg.conversationId) replaceMessageDom(msg);
   renderConversations();
+}
+
+// edição e reação usam a mesma lógica de "substituir a mensagem no estado local"
+function handleMessageUpdated(msg) {
+  handleMessageDeleted(msg);
 }
 
 function statusIconEl(msg) {
@@ -1408,6 +1591,11 @@ function wireShellEvents() {
   });
 
   document.getElementById('btnChatInfo').addEventListener('click', openChatInfo);
+  document.getElementById('btnChatSearch').addEventListener('click', openChatSearch);
+  document.getElementById('btnSearchClose').addEventListener('click', closeChatSearch);
+  document.getElementById('btnSearchNext').addEventListener('click', () => stepChatSearch(1));
+  document.getElementById('btnSearchPrev').addEventListener('click', () => stepChatSearch(-1));
+  document.getElementById('chatSearchInput').addEventListener('input', (e) => runChatSearch(e.target.value));
 
   document.getElementById('chatPeerBtn').addEventListener('click', openChatInfo);
 
@@ -2533,6 +2721,76 @@ function showConnectionBanner(show) {
     document.body.appendChild(banner);
   }
   banner.classList.toggle('show', show);
+}
+
+// ---------- busca dentro da conversa ----------
+App.chatSearch = { matches: [], index: -1 };
+
+function openChatSearch() {
+  const bar = document.getElementById('chatSearchBar');
+  bar.hidden = false;
+  const input = document.getElementById('chatSearchInput');
+  input.value = '';
+  input.focus();
+  clearChatSearchHighlights();
+  updateChatSearchCount();
+}
+
+function closeChatSearch() {
+  const bar = document.getElementById('chatSearchBar');
+  bar.hidden = true;
+  document.getElementById('chatSearchInput').value = '';
+  clearChatSearchHighlights();
+  App.chatSearch = { matches: [], index: -1 };
+}
+
+function clearChatSearchHighlights() {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  container.querySelectorAll('.search-hit, .search-hit-active').forEach((elm) => {
+    elm.classList.remove('search-hit', 'search-hit-active');
+  });
+}
+
+function runChatSearch(query) {
+  clearChatSearchHighlights();
+  const q = query.trim().toLowerCase();
+  const container = document.getElementById('messages');
+  if (!q || !container) {
+    App.chatSearch = { matches: [], index: -1 };
+    updateChatSearchCount();
+    return;
+  }
+  const candidates = [...container.querySelectorAll('.msg-text:not(.msg-deleted-text)')];
+  const matches = candidates.filter((elm) => elm.textContent.toLowerCase().includes(q));
+  matches.forEach((elm) => elm.classList.add('search-hit'));
+  App.chatSearch = { matches, index: matches.length ? 0 : -1 };
+  updateChatSearchCount();
+  if (matches.length) focusSearchMatch();
+}
+
+function stepChatSearch(dir) {
+  const { matches } = App.chatSearch;
+  if (!matches.length) return;
+  App.chatSearch.index = (App.chatSearch.index + dir + matches.length) % matches.length;
+  updateChatSearchCount();
+  focusSearchMatch();
+}
+
+function focusSearchMatch() {
+  const { matches, index } = App.chatSearch;
+  matches.forEach((elm) => elm.classList.remove('search-hit-active'));
+  const current = matches[index];
+  if (!current) return;
+  current.classList.add('search-hit-active');
+  current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function updateChatSearchCount() {
+  const countEl = document.getElementById('chatSearchCount');
+  if (!countEl) return;
+  const { matches, index } = App.chatSearch;
+  countEl.textContent = matches.length ? `${index + 1}/${matches.length}` : (document.getElementById('chatSearchInput').value.trim() ? '0' : '');
 }
 
 // ---------- logout ----------

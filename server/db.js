@@ -88,6 +88,15 @@ db.exec(`
     reason TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS reactions (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    emoji TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (message_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id);
 `);
 
 // Migração leve: adiciona colunas novas em bancos já existentes (ex: no Render)
@@ -102,6 +111,10 @@ ensureColumn('messages', 'deleted', "INTEGER NOT NULL DEFAULT 0");
 ensureColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'cover', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('messages', 'reply_to_id', 'INTEGER');
+ensureColumn('messages', 'edited', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('messages', 'edited_at', 'INTEGER');
+ensureColumn('conversation_members', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('conversation_members', 'muted', 'INTEGER NOT NULL DEFAULT 0');
 
 function now() {
   return Date.now();
@@ -344,6 +357,8 @@ function getConversation(id) {
       isBot: u ? u.isBot : false,
       lastReadMessageId: Number(r.last_read_message_id),
       isAdmin: !!r.is_admin,
+      pinned: !!r.pinned,
+      muted: !!r.muted,
       joinedAt: Number(r.joined_at),
     };
   });
@@ -397,6 +412,58 @@ function getMessage(id) {
 
 function deleteMessageForEveryone(messageId) {
   db.prepare("UPDATE messages SET deleted = 1, content = '' WHERE id = ?").run(Number(messageId));
+}
+
+function editMessage(messageId, newContent) {
+  db.prepare('UPDATE messages SET content = ?, edited = 1, edited_at = ? WHERE id = ?').run(
+    newContent,
+    now(),
+    Number(messageId)
+  );
+}
+
+// ---------- reações ----------
+function setReaction(messageId, userId, emoji) {
+  db.prepare(
+    'INSERT INTO reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at'
+  ).run(Number(messageId), Number(userId), emoji, now());
+}
+
+function removeReaction(messageId, userId) {
+  db.prepare('DELETE FROM reactions WHERE message_id = ? AND user_id = ?').run(
+    Number(messageId),
+    Number(userId)
+  );
+}
+
+function getReactionsForMessage(messageId) {
+  const rows = db
+    .prepare('SELECT user_id, emoji FROM reactions WHERE message_id = ? ORDER BY created_at ASC')
+    .all(Number(messageId));
+  const byEmoji = new Map();
+  for (const r of rows) {
+    if (!byEmoji.has(r.emoji)) byEmoji.set(r.emoji, []);
+    byEmoji.get(r.emoji).push(Number(r.user_id));
+  }
+  return [...byEmoji.entries()].map(([emoji, userIds]) => ({ emoji, userIds }));
+}
+
+// ---------- fixar e silenciar conversa ----------
+function setPinned(conversationId, userId, pinned) {
+  db.prepare('UPDATE conversation_members SET pinned = ? WHERE conversation_id = ? AND user_id = ?').run(
+    pinned ? 1 : 0,
+    Number(conversationId),
+    Number(userId)
+  );
+}
+
+function setMuted(conversationId, userId, muted) {
+  db.prepare('UPDATE conversation_members SET muted = ? WHERE conversation_id = ? AND user_id = ?').run(
+    muted ? 1 : 0,
+    Number(conversationId),
+    Number(userId)
+  );
 }
 
 // ---------- bloqueio e denúncia ----------
@@ -483,10 +550,12 @@ function buildMessagePayload(message, conversation) {
     type: message.type,
     content: message.deleted ? '' : message.content,
     deleted: !!message.deleted,
+    edited: !!message.edited,
     createdAt: Number(message.created_at),
     delivered: !!message.delivered,
     status: computeStatus(message, conversation),
     replyTo,
+    reactions: getReactionsForMessage(message.id),
     sender: sender
       ? { id: sender.id, username: sender.username, displayName: sender.displayName, avatar: sender.avatar }
       : null,
@@ -546,6 +615,7 @@ function buildConversationSummary(userId, conversation) {
   if (conversation.type === 'private') {
     peer = conversation.members.find((m) => m.userId !== Number(userId)) || null;
   }
+  const me = conversation.members.find((m) => m.userId === Number(userId));
   return {
     id: conversation.id,
     type: conversation.type,
@@ -553,6 +623,8 @@ function buildConversationSummary(userId, conversation) {
     avatar: conversation.type === 'group' ? conversation.avatar : peer ? peer.avatar : '',
     peer: peer ? { id: peer.userId, username: peer.username, online: peer.online, lastSeen: peer.lastSeen, isBot: peer.isBot } : null,
     unread,
+    pinned: me ? me.pinned : false,
+    muted: me ? me.muted : false,
     lastMessage,
     lastActivity: lastMessage ? lastMessage.createdAt : conversation.createdAt,
     createdAt: conversation.createdAt,
@@ -565,7 +637,10 @@ function getConversationList(userId) {
   const list = ids
     .map((id) => buildConversationSummary(userId, getConversation(id)))
     .filter(Boolean)
-    .sort((a, b) => b.lastActivity - a.lastActivity);
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return b.pinned - a.pinned;
+      return b.lastActivity - a.lastActivity;
+    });
   return list;
 }
 
@@ -641,4 +716,10 @@ module.exports = {
   isBlockedEitherWay,
   addReport,
   deleteAccount,
+  editMessage,
+  setReaction,
+  removeReaction,
+  getReactionsForMessage,
+  setPinned,
+  setMuted,
 };
