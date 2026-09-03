@@ -180,14 +180,14 @@ function showProfileSetup() {
     e.target.value = '';
     if (!file || !file.type.startsWith('image/')) return;
     try {
-      const { url } = await API.upload(file);
+      const url = await pickAndCropAvatar(file);
       const { user } = await API.updateMe({ avatar: url });
       App.me = user;
       avatar.innerHTML = '';
       avatar.append(avatarImg(App.me, 88));
       toast('Foto atualizada');
     } catch (err) {
-      toast(err.message, 'error');
+      if (err.message !== 'cancelado') toast(err.message, 'error');
     }
   });
 
@@ -812,6 +812,7 @@ function chatStatusText() {
   }
   const peer = conv.peer;
   if (!peer) return '';
+  if (peer.isBot) return '🤖 assistente de IA — sempre disponível';
   return formatLastSeen(peer.lastSeen, peer.online);
 }
 
@@ -2034,64 +2035,56 @@ function openPrivateInfo(conv) {
   );
   box.classList.add('modal-profile');
   const peerFull = conv.members.find((m) => m.userId === peer.id) || peer;
-  if (peerFull.cover) {
-    box.append(el('div', { class: 'profile-cover', style: `background-image:url('${peerFull.cover}')` }));
-  }
-  const footerButtons = [
-    el('button', {
-      class: 'btn btn-primary btn-block', text: 'Enviar mensagem',
-      onclick: () => { closeModal(overlay); openConversation(conv.id); },
-    }),
-    el('button', {
-      class: 'btn btn-block', text: '🖼️ Papel de parede da conversa',
-      onclick: () => openWallpaperPicker(conv.id),
-    }),
-  ];
+
+  const actions = el('div', { class: 'profile-actions-grid' });
+  actions.append(actionTile('💬', 'Mensagem', () => { closeModal(overlay); openConversation(conv.id); }, 'primary'));
+  actions.append(actionTile('🖼️', 'Papel de parede', () => openWallpaperPicker(conv.id)));
 
   if (!peer.isBot) {
-    const blockBtn = el('button', { class: 'btn btn-block', text: 'Bloquear usuário' });
-    blockBtn.addEventListener('click', async () => {
+    const blockTile = actionTile('🚫', 'Bloquear', async () => {
       try {
         const { blockedByMe } = await API.getBlockStatus(peer.id);
         if (blockedByMe) {
           await API.unblockUser(peer.id);
           toast('Usuário desbloqueado');
-          blockBtn.textContent = 'Bloquear usuário';
+          blockTile.querySelector('.action-tile-label').textContent = 'Bloquear';
         } else {
           await API.blockUser(peer.id);
           toast('Usuário bloqueado');
-          blockBtn.textContent = 'Desbloquear usuário';
+          blockTile.querySelector('.action-tile-label').textContent = 'Desbloquear';
         }
       } catch (err) {
         toast(err.message, 'error');
       }
     });
     API.getBlockStatus(peer.id).then(({ blockedByMe }) => {
-      if (blockedByMe) blockBtn.textContent = 'Desbloquear usuário';
+      if (blockedByMe) blockTile.querySelector('.action-tile-label').textContent = 'Desbloquear';
     }).catch(() => {});
-    footerButtons.push(blockBtn);
-
-    footerButtons.push(el('button', {
-      class: 'btn btn-block', text: 'Denunciar usuário',
-      onclick: () => openReportModal(peer.id),
-    }));
+    actions.append(blockTile);
+    actions.append(actionTile('⚠️', 'Denunciar', () => openReportModal(peer.id)));
   }
 
-  footerButtons.push(el('button', {
-    class: 'btn btn-danger btn-block', text: 'Apagar conversa',
-    onclick: () => confirmDeleteConversation(conv, overlay),
-  }));
+  actions.append(actionTile('🗑️', 'Apagar conversa', () => confirmDeleteConversation(conv, overlay), 'danger'));
 
   box.append(
     el('div', { class: 'profile-hero' },
       el('div', { class: 'profile-avatar' }, avatarEl(peerFull, 96, { showOnline: true, online: peer.online })),
       el('h3', { class: 'profile-name', text: peerFull.displayName }),
       el('div', { class: 'profile-uname', text: '@' + peerFull.username }),
-      el('div', { class: 'profile-status', text: formatLastSeen(peer.lastSeen, peer.online) })
+      el('div', { class: 'profile-status', text: peer.isBot ? '🤖 sempre disponível' : formatLastSeen(peer.lastSeen, peer.online) })
     ),
     peerFull.bio ? el('div', { class: 'profile-bio', text: peerFull.bio }) : el('div', { class: 'profile-bio muted', text: 'Sem bio.' }),
-    el('div', { class: 'modal-footer' }, ...footerButtons)
+    actions
   );
+}
+
+function actionTile(icon, label, onclick, variant) {
+  const tile = el('button', { class: 'action-tile' + (variant ? ' action-tile-' + variant : ''), type: 'button' },
+    el('span', { class: 'action-tile-ico', text: icon }),
+    el('span', { class: 'action-tile-label', text: label })
+  );
+  tile.addEventListener('click', onclick);
+  return tile;
 }
 
 function openReportModal(userId) {
@@ -2202,7 +2195,7 @@ function openGroupInfo(conv) {
       e.target.value = '';
       if (!file || !file.type.startsWith('image/')) return;
       try {
-        const { url } = await API.upload(file);
+        const url = await pickAndCropAvatar(file);
         const { conversation } = await API.updateGroupAvatar(conv.id, url);
         App.convMeta[conversation.id] = conversation;
         conv.avatar = conversation.avatar;
@@ -2212,7 +2205,7 @@ function openGroupInfo(conv) {
         if (App.activeConvId === conv.id) renderChatHeader();
         toast('Foto do grupo atualizada');
       } catch (err) {
-        toast(err.message, 'error');
+        if (err.message !== 'cancelado') toast(err.message, 'error');
       }
     });
     heroChildren.push(hiddenFile, avatarBtn);
@@ -2344,30 +2337,6 @@ function openSettingsModal() {
   );
   box.classList.add('modal-profile');
 
-  const coverWrap = el('div', {
-    class: 'profile-cover',
-    style: App.me.cover ? `background-image:url('${App.me.cover}')` : '',
-  });
-  const coverFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
-  const coverBtn = el('button', { class: 'cover-edit', type: 'button', title: 'Trocar foto de capa' },
-    el('span', { class: 'avatar-edit-ico', html: ICONS.camera }), ' Capa');
-  coverBtn.addEventListener('click', () => coverFile.click());
-  coverFile.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    if (!file || !file.type.startsWith('image/')) return;
-    try {
-      const { url } = await API.upload(file);
-      const { user } = await API.updateMe({ cover: url });
-      App.me = user;
-      coverWrap.style.backgroundImage = `url('${url}')`;
-      toast('Foto de capa atualizada');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-  coverWrap.append(coverFile, coverBtn);
-
   const avatarWrap = el('div', { class: 'profile-avatar settings-avatar' }, avatarImg(App.me, 96));
   const hiddenFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
   const avatarBtn = el('button', { class: 'avatar-edit', type: 'button', title: 'Trocar foto' },
@@ -2378,7 +2347,7 @@ function openSettingsModal() {
     e.target.value = '';
     if (!file || !file.type.startsWith('image/')) return;
     try {
-      const { url } = await API.upload(file);
+      const url = await pickAndCropAvatar(file);
       const { user } = await API.updateMe({ avatar: url });
       App.me = user;
       avatarWrap.innerHTML = '';
@@ -2386,7 +2355,7 @@ function openSettingsModal() {
       refreshMeUI();
       toast('Foto atualizada');
     } catch (err) {
-      toast(err.message, 'error');
+      if (err.message !== 'cancelado') toast(err.message, 'error');
     }
   });
 
@@ -2418,7 +2387,6 @@ function openSettingsModal() {
   });
 
   box.append(
-    coverWrap,
     el('div', { class: 'profile-hero' }, avatarWrap, hiddenFile, avatarBtn,
       el('h3', { class: 'profile-name', text: App.me.displayName }),
       el('div', { class: 'profile-uname', text: '@' + App.me.username })
@@ -2426,8 +2394,8 @@ function openSettingsModal() {
     form,
     buildThemePicker(),
     buildSoundToggle(),
-    el('div', { class: 'modal-footer settings-logout' },
-      el('button', { class: 'btn btn-danger btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } }),
+    el('div', { class: 'settings-danger-zone' },
+      el('button', { class: 'btn btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } }),
       el('button', {
         class: 'btn btn-block danger-outline', text: 'Excluir minha conta',
         onclick: () => { closeModal(overlay); confirmDeleteAccount(); },
@@ -2791,6 +2759,125 @@ function updateChatSearchCount() {
   if (!countEl) return;
   const { matches, index } = App.chatSearch;
   countEl.textContent = matches.length ? `${index + 1}/${matches.length}` : (document.getElementById('chatSearchInput').value.trim() ? '0' : '');
+}
+
+// ---------- ajustar foto (crop com zoom e arraste) ----------
+function openImageCropper(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não consegui ler a imagem'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Imagem inválida'));
+      img.onload = () => {
+        const VS = 260;
+        const state = { zoom: 1 };
+        const baseScale = VS / Math.min(img.naturalWidth, img.naturalHeight);
+        const effectiveScale = () => baseScale * state.zoom;
+        const dispSize = () => {
+          const s = effectiveScale();
+          return { w: img.naturalWidth * s, h: img.naturalHeight * s };
+        };
+        const clampOffsets = () => {
+          const { w, h } = dispSize();
+          state.offsetX = Math.min(0, Math.max(VS - w, state.offsetX));
+          state.offsetY = Math.min(0, Math.max(VS - h, state.offsetY));
+        };
+        const { w: w0, h: h0 } = dispSize();
+        state.offsetX = (VS - w0) / 2;
+        state.offsetY = (VS - h0) / 2;
+
+        const { overlay, box } = modal(
+          el('div', { class: 'modal-head' },
+            el('h3', { class: 'modal-title', text: 'Ajustar foto' }),
+            el('button', { class: 'icon-btn', onclick: () => { closeModal(overlay); reject(new Error('cancelado')); }, html: ICONS.close })
+          )
+        );
+
+        const imgEl = el('img', { class: 'cropper-img', src: img.src, draggable: false });
+        const viewport = el('div', { class: 'cropper-viewport' }, imgEl);
+        const stage = el('div', { class: 'cropper-stage' }, viewport);
+
+        function applyTransform() {
+          const { w, h } = dispSize();
+          imgEl.style.width = w + 'px';
+          imgEl.style.height = h + 'px';
+          imgEl.style.transform = `translate(${state.offsetX}px, ${state.offsetY}px)`;
+        }
+        applyTransform();
+
+        let dragging = false;
+        let lastX = 0;
+        let lastY = 0;
+        viewport.addEventListener('pointerdown', (e) => {
+          dragging = true;
+          lastX = e.clientX;
+          lastY = e.clientY;
+          viewport.setPointerCapture(e.pointerId);
+        });
+        viewport.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          state.offsetX += e.clientX - lastX;
+          state.offsetY += e.clientY - lastY;
+          lastX = e.clientX;
+          lastY = e.clientY;
+          clampOffsets();
+          applyTransform();
+        });
+        const endDrag = () => { dragging = false; };
+        viewport.addEventListener('pointerup', endDrag);
+        viewport.addEventListener('pointercancel', endDrag);
+
+        const zoomSlider = el('input', { type: 'range', min: '1', max: '3', step: '0.01', value: '1', class: 'cropper-zoom' });
+        zoomSlider.addEventListener('input', () => {
+          state.zoom = parseFloat(zoomSlider.value);
+          clampOffsets();
+          applyTransform();
+        });
+
+        box.append(
+          el('div', { class: 'modal-body cropper-wrap' },
+            stage,
+            el('div', { class: 'cropper-zoom-row' },
+              el('span', { class: 'cropper-zoom-ico', text: '🔍' }),
+              zoomSlider
+            ),
+            el('p', { class: 'cropper-hint', text: 'Arraste para posicionar e use o controle para dar zoom.' })
+          ),
+          el('div', { class: 'modal-footer' },
+            el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => { closeModal(overlay); reject(new Error('cancelado')); } }),
+            el('button', {
+              class: 'btn btn-primary btn-block', text: 'Usar foto',
+              onclick: () => {
+                const outputSize = 480;
+                const canvas = document.createElement('canvas');
+                canvas.width = outputSize;
+                canvas.height = outputSize;
+                const ctx = canvas.getContext('2d');
+                const s = effectiveScale();
+                const srcX = (0 - state.offsetX) / s;
+                const srcY = (0 - state.offsetY) / s;
+                const srcSize = VS / s;
+                ctx.drawImage(img, srcX, srcY, srcSize, srcSize, 0, 0, outputSize, outputSize);
+                canvas.toBlob((blob) => {
+                  closeModal(overlay);
+                  resolve(blob);
+                }, 'image/jpeg', 0.85);
+              },
+            })
+          )
+        );
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function pickAndCropAvatar(file) {
+  const blob = await openImageCropper(file);
+  const { url } = await API.upload(blob, 'avatar.jpg');
+  return url;
 }
 
 // ---------- logout ----------
