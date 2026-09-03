@@ -2436,10 +2436,10 @@ function confirmDeleteAccount() {
 
 // ---------- temas ----------
 const THEMES = [
-  { key: 'blue', label: 'Azul (padrão)', swatch: ['#0a101d', '#2f6bff', '#4d86ff'] },
-  { key: 'mono', label: 'Preto e branco', swatch: ['#050505', '#ffffff', '#8a8a8a'] },
-  { key: 'redblack', label: 'Vermelho e preto', swatch: ['#0a0505', '#ff3b3b', '#241212'] },
-  { key: 'green', label: 'Verde escuro e branco', swatch: ['#06120d', '#16a34a', '#f2fbf7'] },
+  { key: 'blue', label: 'Azul (padrão)', bg: '#0a101d', sent: 'linear-gradient(135deg, #1e5eff, #2f6bff)', sentText: '#fff', received: '#182338' },
+  { key: 'mono', label: 'Preto e branco', bg: '#000000', sent: '#ffffff', sentText: '#000000', received: '#1c1c1c' },
+  { key: 'redblack', label: 'Vermelho e preto', bg: '#000000', sent: 'linear-gradient(135deg, #b30000, #ff1f1f)', sentText: '#fff', received: '#1c0707' },
+  { key: 'green', label: 'Verde e branco', bg: '#041008', sent: 'linear-gradient(135deg, #00822f, #00c853)', sentText: '#fff', received: '#0a2015' },
 ];
 
 function applyTheme(key) {
@@ -2458,8 +2458,9 @@ function buildThemePicker() {
   const current = localStorage.getItem('pulse_theme') || 'blue';
   const grid = el('div', { class: 'theme-grid' });
   for (const t of THEMES) {
-    const swatch = el('span', { class: 'theme-swatch' },
-      ...t.swatch.map((c) => el('span', { class: 'theme-swatch-dot', style: `background:${c}` }))
+    const swatch = el('div', { class: 'theme-swatch', style: `background:${t.bg}` },
+      el('span', { class: 'theme-swatch-bubble theme-swatch-bubble-theirs', style: `background:${t.received}` }),
+      el('span', { class: 'theme-swatch-bubble theme-swatch-bubble-mine', style: `background:${t.sent};color:${t.sentText}` })
     );
     const btn = el('button', {
       class: 'theme-option' + (t.key === current ? ' active' : ''),

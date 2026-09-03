@@ -1,7 +1,7 @@
 'use strict';
 
 const ICONS = {
-  logo: `<svg viewBox="0 0 32 32" width="24" height="24" fill="none" aria-hidden="true"><rect x="2" y="16" width="6" height="14" rx="2" fill="#2f6bff"/><rect x="11" y="9" width="6" height="21" rx="2" fill="#3d7bff"/><rect x="20" y="3" width="6" height="27" rx="2" fill="#598cff"/></svg>`,
+  logo: `<img src="/icons/logo-mark.png" alt="Pulse" />`,
   send: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.5-7.5a1 1 0 000-1.8L3.4 3.6a1 1 0 00-1.39 1.2l1.8 6.2-1.8 6.2a1 1 0 001.39 1.2z"/><path d="M4 11h5a1 1 0 010 2H4z" fill="#080c16"/></svg>`,
   mic: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0014 0"/><path d="M12 17v4"/></svg>`,
   stopRec: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`,

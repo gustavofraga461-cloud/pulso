@@ -1,14 +1,15 @@
-const CACHE = 'pulse-v6';
+const CACHE = 'pulse-v7';
 const PRECACHE = [
   '/',
-  '/css/style.css?v=6',
-  '/js/utils.js?v=6',
-  '/js/ui.js?v=6',
-  '/js/api.js?v=6',
-  '/js/app.js?v=6',
+  '/css/style.css?v=7',
+  '/js/utils.js?v=7',
+  '/js/ui.js?v=7',
+  '/js/api.js?v=7',
+  '/js/app.js?v=7',
   '/manifest.json',
   '/icons/icon-192.png',
-  '/icons/icon-512.png'
+  '/icons/icon-512.png',
+  '/icons/logo-mark.png'
 ];
 
 self.addEventListener('install', (event) => {
