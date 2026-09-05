@@ -36,7 +36,8 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 app.use(express.static(PUBLIC_DIR));
 
 // ---------- Uploads ----------
-const ALLOWED_MIMES = /^(image\/(jpeg|png|gif|webp)|audio\/(webm|ogg|mp3|m4a|mp4|wav|x-m4a|x-wav))$/;
+// Aceita qualquer tipo de arquivo (fotos, vídeos, áudios, documentos, .zip, etc.)
+// — o único limite real é o tamanho (10MB), controlado abaixo.
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -47,10 +48,6 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (ALLOWED_MIMES.test(file.mimetype)) cb(null, true);
-    else cb(new Error('tipo_de_arquivo_nao_suportado'));
-  },
 });
 
 // ---------- Auth middleware ----------
@@ -345,7 +342,8 @@ app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
     }
   }
 
-  const type = req.body.type === 'image' || req.body.type === 'audio' ? req.body.type : 'text';
+  const ALLOWED_TYPES = ['image', 'audio', 'video', 'file'];
+  const type = ALLOWED_TYPES.includes(req.body.type) ? req.body.type : 'text';
   const content = String(req.body.content || '').trim().slice(0, 5000);
   if (!content) return res.status(400).json({ error: 'conteudo_vazio' });
   let replyToId = req.body.replyToId ? Number(req.body.replyToId) : null;
@@ -482,9 +480,18 @@ app.post('/api/conversations/:id/read', authRequired, (req, res) => {
   res.json({ ok: true, lastReadMessageId: lastReadId });
 });
 
-app.post('/api/upload', authRequired, upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'arquivo_obrigatorio' });
-  res.json({ url: `/uploads/${req.file.filename}` });
+app.post('/api/upload', authRequired, (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'arquivo_grande', message: 'Esse arquivo passa de 10MB. Escolha um menor.' });
+      }
+      console.error('Erro no upload:', err.message);
+      return res.status(400).json({ error: 'upload_falhou', message: 'Não foi possível enviar esse arquivo.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'arquivo_obrigatorio' });
+    res.json({ url: `/uploads/${req.file.filename}`, originalName: req.file.originalname, size: req.file.size });
+  });
 });
 
 // ---------- Push (Web Push / PWA) ----------
@@ -507,7 +514,8 @@ app.post('/api/push/unsubscribe', authRequired, (req, res) => {
 });
 
 function pushMessageToRecipients(conversation, payload, excludeUserId) {
-  const text = payload.type === 'image' ? 'Foto' : payload.type === 'audio' ? 'Áudio' : payload.content;
+  const textByType = { image: '📷 Foto', video: '🎥 Vídeo', audio: '🎤 Áudio', file: '📎 Arquivo' };
+  const text = payload.deleted ? 'Mensagem apagada' : (textByType[payload.type] || payload.content);
   const sender = payload.sender || {};
   for (const member of conversation.members) {
     if (member.userId === Number(excludeUserId)) continue;
@@ -522,6 +530,10 @@ function pushMessageToRecipients(conversation, payload, excludeUserId) {
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
         senderId: Number(excludeUserId),
+      }).then((result) => {
+        if (!result.ok && result.reason === 'gone') {
+          db.deletePushSubscription(sub.endpoint);
+        }
       });
     }
   }

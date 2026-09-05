@@ -135,6 +135,8 @@ function messagePreviewText(message, myUserId) {
   const prefix = message.senderId === myUserId ? 'Você: ' : '';
   if (message.deleted) return `${prefix}Mensagem apagada`;
   if (message.type === 'image') return `${prefix}Foto`;
+  if (message.type === 'video') return `${prefix}Vídeo`;
   if (message.type === 'audio') return `${prefix}Áudio`;
+  if (message.type === 'file') return `${prefix}Arquivo`;
   return `${prefix}${message.content}`;
 }

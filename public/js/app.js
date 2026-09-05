@@ -1,5 +1,7 @@
 'use strict';
 
+const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // precisa bater com o limite do multer no servidor
+
 const App = {
   me: null,
   token: null,
@@ -319,8 +321,20 @@ function showApp() {
             el('button', { class: 'icon-btn', id: 'btnEmoji', title: 'Emojis', html: ICONS.emoji }),
             el('div', { class: 'emoji-picker', id: 'emojiPicker', hidden: true })
           ),
-          el('label', { class: 'icon-btn attach-btn', id: 'btnAttach', title: 'Enviar imagem', html: ICONS.attach },
-            el('input', { type: 'file', accept: 'image/*', id: 'fileInput', hidden: true })
+          el('div', { class: 'attach-wrap' },
+            el('button', { class: 'icon-btn', id: 'btnAttach', title: 'Anexar', html: ICONS.attach }),
+            el('div', { class: 'attach-menu', id: 'attachMenu', hidden: true },
+              el('button', { class: 'attach-menu-item', id: 'attachMediaBtn', type: 'button' },
+                el('span', { class: 'attach-menu-ico attach-menu-ico-media', text: '🖼️' }),
+                el('span', { class: 'attach-menu-label', text: 'Fotos e vídeos' })
+              ),
+              el('button', { class: 'attach-menu-item', id: 'attachDocBtn', type: 'button' },
+                el('span', { class: 'attach-menu-ico attach-menu-ico-doc', text: '📄' }),
+                el('span', { class: 'attach-menu-label', text: 'Documento' })
+              )
+            ),
+            el('input', { type: 'file', accept: 'image/*,video/*', id: 'mediaInput', hidden: true }),
+            el('input', { type: 'file', accept: '*/*', id: 'docInput', hidden: true })
           ),
           el('div', { class: 'composer-input-wrap' },
             el('div', { class: 'rec-wrap', id: 'recWrap', hidden: true },
@@ -367,6 +381,18 @@ async function setupPush() {
     if (!reg.pushManager) return;
     const { publicKey } = await API.getVapidPublicKey();
     let sub = await reg.pushManager.getSubscription();
+
+    // Se a chave pública do servidor mudou desde a última inscrição (ex.: o
+    // servidor reiniciou e gerou chaves novas), a inscrição antiga fica
+    // "morta" silenciosamente. Detecta isso e renova.
+    if (sub) {
+      const currentKey = arrayBufferToBase64Url(sub.options ? sub.options.applicationServerKey : null);
+      if (currentKey && currentKey !== publicKey) {
+        await sub.unsubscribe().catch(() => {});
+        sub = null;
+      }
+    }
+
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
@@ -378,6 +404,14 @@ async function setupPush() {
   } catch (_err) {
     // Push não disponível (ex.: permissão negada ou navegador sem suporte). O app continua funcionando normalmente.
   }
+}
+
+function arrayBufferToBase64Url(buffer) {
+  if (!buffer) return null;
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 async function teardownPush() {
@@ -885,8 +919,12 @@ function messageDom(msg, conv) {
     );
   } else if (msg.type === 'image') {
     bubbleChildren.push(el('img', { class: 'msg-image', src: msg.content, loading: 'lazy', alt: 'Foto', onclick: () => openLightbox(msg.content) }));
+  } else if (msg.type === 'video') {
+    bubbleChildren.push(el('video', { class: 'msg-video', src: msg.content, controls: true, preload: 'metadata', playsinline: true }));
   } else if (msg.type === 'audio') {
     bubbleChildren.push(el('audio', { class: 'msg-audio', src: msg.content, controls: true, preload: 'metadata' }));
+  } else if (msg.type === 'file') {
+    bubbleChildren.push(fileCardEl(parseFileMeta(msg.content)));
   } else {
     bubbleChildren.push(el('span', { class: 'msg-text', text: msg.content }));
   }
@@ -923,6 +961,44 @@ function messageDom(msg, conv) {
   return row;
 }
 
+// ---------- arquivos/documentos ----------
+function parseFileMeta(content) {
+  try {
+    const obj = JSON.parse(content);
+    if (obj && obj.url) return obj;
+  } catch (e) {
+    /* mensagem antiga ou conteúdo inesperado */
+  }
+  return { url: content, name: 'Arquivo', size: 0 };
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+const FILE_ICONS = {
+  pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
+  zip: '🗜️', rar: '🗜️', '7z': '🗜️', txt: '📄', csv: '📄', mp3: '🎵', wav: '🎵', apk: '📦',
+};
+function fileExtIcon(name) {
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  return FILE_ICONS[ext] || '📎';
+}
+
+function fileCardEl(meta) {
+  return el('a', { class: 'file-card', href: meta.url, target: '_blank', rel: 'noopener', download: meta.name || true },
+    el('span', { class: 'file-card-ico', text: fileExtIcon(meta.name) }),
+    el('div', { class: 'file-card-info' },
+      el('div', { class: 'file-card-name', text: meta.name || 'Arquivo' }),
+      el('div', { class: 'file-card-size', text: formatFileSize(meta.size) })
+    ),
+    el('span', { class: 'file-card-download', html: ICONS.download })
+  );
+}
+
 // ---------- ações da mensagem (responder / apagar) ----------
 function canDeleteMessage(msg, conv) {
   if (!msg || msg.type === 'system' || msg.deleted) return false;
@@ -953,12 +1029,8 @@ function attachMessageGesture(row, msg, conv) {
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 function openMessageActions(msg, conv) {
-  const { overlay, box } = modal(
-    el('div', { class: 'modal-head' },
-      el('h3', { class: 'modal-title', text: 'Mensagem' }),
-      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
-    )
-  );
+  const { overlay, box } = modal(el('div', { class: 'sheet-handle' }));
+  box.classList.add('msg-actions-sheet');
 
   const myReaction = (msg.reactions || []).find((r) => r.userIds.includes(App.me.id));
   const reactionRow = el('div', { class: 'reaction-picker' });
@@ -980,45 +1052,45 @@ function openMessageActions(msg, conv) {
     }));
   }
 
-  const buttons = [
-    el('button', {
-      class: 'btn btn-block', text: '↩️ Responder',
-      onclick: () => {
-        setReplyTarget(msg);
-        closeModal(overlay);
-      },
-    }),
-  ];
+  const actionList = el('div', { class: 'msg-action-list' });
+  actionList.append(msgActionItem('↩️', 'Responder', 'reply', () => {
+    setReplyTarget(msg);
+    closeModal(overlay);
+  }));
   if (msg.senderId === App.me.id && msg.type === 'text' && !msg.deleted) {
-    buttons.push(el('button', {
-      class: 'btn btn-block', text: '✏️ Editar',
-      onclick: () => {
-        closeModal(overlay);
-        openEditMessageModal(msg, conv);
-      },
+    actionList.append(msgActionItem('✏️', 'Editar', 'edit', () => {
+      closeModal(overlay);
+      openEditMessageModal(msg, conv);
     }));
   }
   if (canDeleteMessage(msg, conv)) {
-    buttons.push(el('button', {
-      class: 'btn btn-danger btn-block', text: '🗑️ Apagar para todos',
-      onclick: async () => {
-        try {
-          const { message } = await API.deleteMessage(conv.id, msg.id);
-          handleMessageDeleted(message);
-          closeModal(overlay);
-        } catch (err) {
-          toast(err.message, 'error');
-        }
-      },
+    actionList.append(msgActionItem('🗑️', 'Apagar para todos', 'danger', async () => {
+      try {
+        const { message } = await API.deleteMessage(conv.id, msg.id);
+        handleMessageDeleted(message);
+        closeModal(overlay);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     }));
   }
+
   box.append(
-    el('div', { class: 'modal-body' },
+    el('div', { class: 'msg-actions-body' },
       el('div', { class: 'reaction-picker-label', text: 'Reagir' }),
-      reactionRow
-    ),
-    el('div', { class: 'modal-footer' }, ...buttons)
+      reactionRow,
+      actionList
+    )
   );
+}
+
+function msgActionItem(icon, label, variant, onclick) {
+  const item = el('button', { class: 'msg-action-item' + (variant === 'danger' ? ' msg-action-danger' : ''), type: 'button' },
+    el('span', { class: 'msg-action-ico' + (variant === 'danger' ? ' msg-action-ico-danger' : ''), text: icon }),
+    el('span', { class: 'msg-action-label', text: label })
+  );
+  item.addEventListener('click', onclick);
+  return item;
 }
 
 function openEditMessageModal(msg, conv) {
@@ -1055,7 +1127,9 @@ function openEditMessageModal(msg, conv) {
 function replyPreviewText(msg) {
   if (!msg) return '';
   if (msg.type === 'image') return '📷 Foto';
+  if (msg.type === 'video') return '🎥 Vídeo';
   if (msg.type === 'audio') return '🎤 Áudio';
+  if (msg.type === 'file') return '📎 ' + (parseFileMeta(msg.content).name || 'Arquivo');
   return msg.content || '';
 }
 
@@ -1552,6 +1626,8 @@ function wireShellEvents() {
       picker.hidden = true;
       App.emojiOpen = false;
     }
+    const attachMenu = document.getElementById('attachMenu');
+    if (attachMenu) attachMenu.hidden = true;
   });
 
   // chat events
@@ -1607,20 +1683,65 @@ function wireShellEvents() {
     toggleEmojiPicker();
   });
 
-  document.getElementById('btnAttach').addEventListener('change', async (e) => {
+  document.getElementById('btnAttach').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const menu = document.getElementById('attachMenu');
+    menu.hidden = !menu.hidden;
+  });
+  document.getElementById('attachMediaBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('attachMenu').hidden = true;
+    document.getElementById('mediaInput').click();
+  });
+  document.getElementById('attachDocBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('attachMenu').hidden = true;
+    document.getElementById('docInput').click();
+  });
+
+  document.getElementById('mediaInput').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast('Envie uma imagem válida.', 'error');
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      toast('Selecione uma foto ou vídeo válido.', 'error');
       return;
     }
-    toast('Enviando imagem...');
+    if (file.size > MAX_UPLOAD_SIZE) {
+      toast('Esse arquivo passa de 10MB. Escolha um menor.', 'error');
+      return;
+    }
     try {
-      const dataUrl = await resizeImageFile(file, 1600, 0.8);
-      const blob = dataUrlToBlob(dataUrl);
-      const { url } = await API.upload(blob, 'foto.jpg');
-      await sendMediaMessage('image', url);
+      if (isImage) {
+        toast('Enviando foto...');
+        const blob = await compressImageToBlob(file, 1600, 0.8);
+        const { url } = await API.upload(blob, 'foto.jpg');
+        await sendMediaMessage('image', url);
+      } else {
+        toast('Enviando vídeo...');
+        const { url } = await API.upload(file, file.name || 'video.mp4');
+        await sendMediaMessage('video', url);
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('docInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_SIZE) {
+      toast('Esse arquivo passa de 10MB. Escolha um menor.', 'error');
+      return;
+    }
+    toast('Enviando arquivo...');
+    try {
+      const { url } = await API.upload(file, file.name || 'arquivo');
+      const meta = JSON.stringify({ url, name: file.name || 'arquivo', size: file.size });
+      await sendMediaMessage('file', meta);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -2513,11 +2634,15 @@ function playTone(freq, duration, type, gainPeak, delay) {
   }
 }
 function playSentSound() {
-  playTone(720, 0.07, 'sine', 0.1, 0);
+  playTone(600, 0.05, 'sine', 0.08, 0);
+  playTone(900, 0.06, 'sine', 0.07, 0.04);
 }
 function playReceivedSound() {
-  playTone(560, 0.08, 'sine', 0.12, 0);
-  playTone(840, 0.1, 'sine', 0.1, 0.07);
+  // um "sininho" de duas notas com um brilho harmônico por cima — mais bonito
+  // que um bipe simples, e diferente do som de envio.
+  playTone(880, 0.16, 'triangle', 0.14, 0);
+  playTone(1760, 0.1, 'sine', 0.045, 0.02);
+  playTone(659, 0.24, 'triangle', 0.13, 0.12);
 }
 
 function buildSoundToggle() {
@@ -2579,6 +2704,35 @@ function applyWallpaper(convId) {
       if (preset.size) container.style.backgroundSize = preset.size;
     }
   }
+}
+
+// ---------- compressão rápida de foto antes de enviar (sem passar por base64) ----------
+async function compressImageToBlob(file, maxDim, quality) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      let { width, height } = bitmap;
+      if (width > height && width > maxDim) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else if (height > maxDim) {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+      if (bitmap.close) bitmap.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality || 0.8));
+      if (blob) return blob;
+    } catch (e) {
+      // segue pro caminho alternativo abaixo se o navegador não suportar bem
+    }
+  }
+  // caminho alternativo (navegadores mais antigos): via dataURL, mais lento
+  const dataUrl = await resizeImageFile(file, maxDim, quality);
+  return dataUrlToBlob(dataUrl);
 }
 
 function dataUrlToBlob(dataUrl) {

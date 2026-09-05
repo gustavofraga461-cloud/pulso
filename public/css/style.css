@@ -1032,6 +1032,115 @@ textarea {
   display: none;
 }
 
+/* menu de anexo (fotos/vídeos vs documento) */
+.attach-wrap {
+  position: relative;
+}
+.attach-menu {
+  position: absolute;
+  bottom: 46px;
+  left: 0;
+  min-width: 200px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 50;
+  animation: attachMenuPop 0.14s ease;
+}
+@keyframes attachMenuPop {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  transition: background 0.12s ease;
+}
+.attach-menu-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+.attach-menu-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.attach-menu-ico-media {
+  background: rgba(168, 85, 247, 0.18);
+}
+.attach-menu-ico-doc {
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+/* vídeo na mensagem */
+.msg-video {
+  display: block;
+  max-width: 320px;
+  max-height: 340px;
+  border-radius: 10px;
+  margin: -2px -2px 2px;
+  background: #000;
+}
+
+/* cartão de arquivo/documento na mensagem */
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 240px;
+  max-width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.12s ease;
+}
+.file-card:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+.file-card-ico {
+  font-size: 26px;
+  flex-shrink: 0;
+}
+.file-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.file-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-card-size {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.file-card-download {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.file-card-download svg {
+  width: 16px;
+  height: 16px;
+}
+
 .composer-input-wrap {
   flex: 1;
   min-width: 0;
@@ -1147,6 +1256,10 @@ textarea {
   z-index: 100;
   padding: 20px;
   animation: fadeUp 0.18s ease;
+}
+.modal-overlay:has(.msg-actions-sheet) {
+  align-items: flex-end;
+  padding: 0;
 }
 .modal {
   width: 100%;
@@ -1579,28 +1692,90 @@ textarea {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-3);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .reaction-picker {
   display: flex;
   justify-content: space-between;
-  gap: 4px;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 .reaction-picker-btn {
   flex: 1;
+  aspect-ratio: 1;
   font-size: 22px;
-  padding: 8px 0;
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   background: var(--panel-2);
   border: 1px solid transparent;
-  transition: transform 0.12s ease, background 0.12s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.14s ease, background 0.14s ease;
 }
 .reaction-picker-btn:hover {
-  transform: scale(1.15);
+  transform: scale(1.18) translateY(-2px);
 }
 .reaction-picker-btn.active {
   border-color: var(--accent);
   background: var(--accent-soft);
+  transform: scale(1.1);
+}
+
+/* menu de ações da mensagem (bottom sheet) */
+.msg-actions-sheet {
+  max-width: 380px;
+  border-radius: 22px 22px 0 0;
+  padding-top: 4px;
+}
+.sheet-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--border-2);
+  margin: 10px auto 4px;
+}
+.msg-actions-body {
+  padding: 14px 18px 20px;
+}
+.msg-action-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.msg-action-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 10px;
+  border-radius: 12px;
+  transition: background 0.12s ease;
+}
+.msg-action-item:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+.msg-action-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.msg-action-ico-danger {
+  background: var(--danger-soft);
+}
+.msg-action-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.msg-action-danger .msg-action-label {
+  color: var(--danger);
 }
 
 /* citação de resposta dentro do balão */

@@ -1,11 +1,11 @@
-const CACHE = 'pulse-v7';
+const CACHE = 'pulse-v8';
 const PRECACHE = [
   '/',
-  '/css/style.css?v=7',
-  '/js/utils.js?v=7',
-  '/js/ui.js?v=7',
-  '/js/api.js?v=7',
-  '/js/app.js?v=7',
+  '/css/style.css?v=8',
+  '/js/utils.js?v=8',
+  '/js/ui.js?v=8',
+  '/js/api.js?v=8',
+  '/js/app.js?v=8',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
