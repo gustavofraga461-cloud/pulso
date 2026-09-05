@@ -1667,14 +1667,16 @@ textarea {
 .reaction-chip {
   display: flex;
   gap: 3px;
-  margin-top: -8px;
-  padding: 2px 6px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
+  margin-top: -10px;
+  padding: 3px 7px;
+  background: var(--panel-3);
+  border: 1px solid var(--border-2);
   border-radius: 12px;
   align-self: flex-start;
-  font-size: 12px;
+  font-size: 13px;
   box-shadow: var(--shadow-sm);
+  position: relative;
+  z-index: 2;
 }
 .reaction-chip.mine {
   align-self: flex-end;

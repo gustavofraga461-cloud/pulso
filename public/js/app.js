@@ -334,7 +334,12 @@ function showApp() {
               )
             ),
             el('input', { type: 'file', accept: 'image/*,video/*', id: 'mediaInput', hidden: true }),
-            el('input', { type: 'file', accept: '*/*', id: 'docInput', hidden: true })
+            el('input', {
+              type: 'file',
+              accept: '.zip,.rar,.7z,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.apk,application/*,text/*',
+              id: 'docInput',
+              hidden: true,
+            })
           ),
           el('div', { class: 'composer-input-wrap' },
             el('div', { class: 'rec-wrap', id: 'recWrap', hidden: true },
