@@ -32,16 +32,25 @@ function isConfigured() {
 
 async function callGemini(model, body) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  return fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      // Chaves novas do Google (formato "AQ...") só funcionam nesse cabeçalho,
-      // não no jeito antigo de colar a chave na URL (?key=...).
-      'X-goog-api-key': GEMINI_API_KEY,
-    },
-    body: JSON.stringify(body),
-  });
+  // Limite de tempo por tentativa: se o Google ficar mudo, desiste desse
+  // modelo e tenta o próximo em vez de deixar a pessoa esperando pra sempre.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    return await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Chaves novas do Google (formato "AQ...") só funcionam nesse cabeçalho,
+        // não no jeito antigo de colar a chave na URL (?key=...).
+        'X-goog-api-key': GEMINI_API_KEY,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // history: array de { role: 'user' | 'model', text: string }, do mais antigo pro mais novo
@@ -61,10 +70,15 @@ async function generateReply(history) {
   const body = {
     contents,
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    // Os modelos mais novos da família Gemini 3 "pensam" internamente antes
-    // de responder, e isso consome uma parte do limite de tokens de saída.
-    // Um limite baixo demais corta a resposta antes dela aparecer de verdade.
-    generationConfig: { maxOutputTokens: 2048, temperature: 0.85 },
+    // "thinkingLevel: LOW" evita que o modelo "pense" demais antes de responder.
+    // Por padrão os modelos Gemini 3 fazem um raciocínio interno bem mais longo
+    // (ótimo pra tarefas complexas, mas deixa uma conversa casual de chat com
+    // 1-2 minutos de demora à toa). Pra esse bot de bate-papo, rápido é melhor.
+    generationConfig: {
+      maxOutputTokens: 1024,
+      temperature: 0.85,
+      thinkingConfig: { thinkingLevel: 'LOW' },
+    },
   };
 
   const modelsToTry = workingModel
@@ -78,8 +92,11 @@ async function generateReply(history) {
     try {
       res = await callGemini(model, body);
     } catch (err) {
-      console.error('Falha de rede ao chamar o Gemini:', err.message);
-      return 'Não consegui me conectar à minha IA agora. Tenta de novo daqui a pouco?';
+      const timedOut = err.name === 'AbortError';
+      console.error(`Falha ao chamar o Gemini (modelo "${model}"):`, timedOut ? 'demorou demais (timeout)' : err.message);
+      lastStatus = timedOut ? 'timeout' : 'network';
+      workingModel = null;
+      continue; // tenta o próximo modelo da lista em vez de desistir de tudo
     }
 
     if (res.ok) {
@@ -110,9 +127,10 @@ async function generateReply(history) {
     console.error(`Erro na API do Gemini (modelo "${model}"):`, res.status, lastErrText);
 
     // 404 = esse nome de modelo não existe. 503 = modelo sobrecarregado agora.
-    // Em ambos os casos vale tentar o próximo modelo da lista.
+    // 400 = pode ser que esse modelo não aceite alguma opção que mandamos
+    // (ex.: thinkingLevel), então também vale tentar o próximo da lista.
     // Pra qualquer outro erro (401, 403, 429...) não adianta trocar de modelo, então já para.
-    if (res.status !== 404 && res.status !== 503) {
+    if (res.status !== 404 && res.status !== 503 && res.status !== 400) {
       workingModel = null; // não trava nesse modelo se ele começou a dar erro de verdade
       break;
     }
@@ -127,6 +145,12 @@ async function generateReply(history) {
   }
   if (lastStatus === 503) {
     return 'Meus modelos de IA estão todos com muita gente usando agora 😅 Tenta de novo daqui a pouquinho.';
+  }
+  if (lastStatus === 'timeout') {
+    return 'Minha IA está bem lenta agora e nem respondeu a tempo. Tenta de novo?';
+  }
+  if (lastStatus === 'network') {
+    return 'Não consegui me conectar à minha IA agora. Tenta de novo daqui a pouco?';
   }
   return 'Deu um errinho aqui tentando pensar na resposta. Pode tentar de novo?';
 }
