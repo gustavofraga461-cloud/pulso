@@ -369,6 +369,17 @@ function maybeReplyAsBot(conversation, fromUserId) {
   const isBotConversation = conversation.members.some((m) => m.userId === bot.id);
   if (!isBotConversation || Number(fromUserId) === bot.id) return;
 
+  const room = `conv:${conversation.id}`;
+  const emitTyping = (isTyping) => {
+    io.to(room).emit('typing', { conversationId: conversation.id, userId: bot.id, isTyping });
+  };
+
+  // Mostra o "digitando..." assim que começa a pensar, e mantém ele vivo
+  // (o front-end esquece sozinho depois de alguns segundos sem novidade,
+  // e a IA pode demorar mais que isso pra responder).
+  emitTyping(true);
+  const heartbeat = setInterval(() => emitTyping(true), 2500);
+
   // Roda em segundo plano: quem mandou a mensagem já recebeu a resposta HTTP normal,
   // a resposta do bot chega depois via socket, como uma mensagem nova de verdade.
   (async () => {
@@ -382,12 +393,15 @@ function maybeReplyAsBot(conversation, fromUserId) {
       const replyId = db.addMessage(conversation.id, bot.id, 'text', replyText);
       const replyPayload = db.getLastMessage(conversation.id);
       if (replyPayload) {
-        io.to(`conv:${conversation.id}`).emit('message:new', replyPayload);
+        io.to(room).emit('message:new', replyPayload);
         const freshConv = db.getConversation(conversation.id);
         pushMessageToRecipients(freshConv, replyPayload, bot.id);
       }
     } catch (err) {
       console.error('Erro ao gerar resposta do FragaIA:', err);
+    } finally {
+      clearInterval(heartbeat);
+      emitTyping(false);
     }
   })();
 }
