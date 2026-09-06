@@ -10,9 +10,12 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 // O Google vem trocando os nomes dos modelos com frequência em 2026.
 // Se a pessoa configurar GEMINI_MODEL, só esse nome é tentado; senão,
 // tentamos essa lista em ordem até um funcionar, e guardamos qual deu certo.
+// Atualizado em set/2026: gemini-2.5-flash e gemini-2.0-flash foram tirados
+// da lista porque o Google vai desligá-los em outubro de 2026 — manter eles
+// como reserva não ajudaria em nada. Modelos atuais, do mais novo pro mais estável:
 const MODEL_CANDIDATES = process.env.GEMINI_MODEL
   ? [process.env.GEMINI_MODEL]
-  : ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-pro-latest'];
+  : ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-pro-latest'];
 
 let workingModel = null;
 
@@ -58,7 +61,10 @@ async function generateReply(history) {
   const body = {
     contents,
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    generationConfig: { maxOutputTokens: 800, temperature: 0.85 },
+    // Os modelos mais novos da família Gemini 3 "pensam" internamente antes
+    // de responder, e isso consome uma parte do limite de tokens de saída.
+    // Um limite baixo demais corta a resposta antes dela aparecer de verdade.
+    generationConfig: { maxOutputTokens: 2048, temperature: 0.85 },
   };
 
   const modelsToTry = workingModel
@@ -90,6 +96,9 @@ async function generateReply(history) {
       if (!text) {
         if (candidate && candidate.finishReason === 'SAFETY') {
           return 'Prefiro não responder isso 🙏 Bora falar de outra coisa?';
+        }
+        if (candidate && candidate.finishReason === 'MAX_TOKENS') {
+          return 'Essa pergunta me fez pensar demais e acabei sem espaço pra responder 😅 Pode perguntar de um jeito mais direto?';
         }
         return 'Não consegui pensar em nada bom agora. Pode reformular a pergunta?';
       }
