@@ -115,6 +115,9 @@ ensureColumn('messages', 'edited', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('messages', 'edited_at', 'INTEGER');
 ensureColumn('conversation_members', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('conversation_members', 'muted', 'INTEGER NOT NULL DEFAULT 0');
+// 'accepted' (padrão, cobre tudo que já existia) ou 'pending' — usado só em
+// conversas privadas novas entre duas pessoas que nunca conversaram antes.
+ensureColumn('conversations', 'status', "TEXT NOT NULL DEFAULT 'accepted'");
 
 function now() {
   return Date.now();
@@ -290,10 +293,10 @@ function findPrivateConversation(a, b) {
   return row ? Number(row.id) : null;
 }
 
-function createConversation({ type, name = null, avatar = '', createdBy }) {
+function createConversation({ type, name = null, avatar = '', createdBy, status = 'accepted' }) {
   const info = db
-    .prepare('INSERT INTO conversations (type, name, avatar, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(type, name, avatar, Number(createdBy), now());
+    .prepare('INSERT INTO conversations (type, name, avatar, created_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(type, name, avatar, Number(createdBy), status, now());
   return Number(info.lastInsertRowid);
 }
 
@@ -368,9 +371,14 @@ function getConversation(id) {
     name: c.name,
     avatar: c.avatar || '',
     createdBy: c.created_by ? Number(c.created_by) : null,
+    status: c.status || 'accepted',
     createdAt: Number(c.created_at),
     members,
   };
+}
+
+function setConversationStatus(conversationId, status) {
+  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run(status, Number(conversationId));
 }
 
 function updateConversation(conversationId, fields) {
@@ -616,6 +624,11 @@ function buildConversationSummary(userId, conversation) {
     peer = conversation.members.find((m) => m.userId !== Number(userId)) || null;
   }
   const me = conversation.members.find((m) => m.userId === Number(userId));
+  // "isRequest" = alguém mandou a primeira mensagem e eu (quem tá vendo) ainda
+  // não aceitei nem rejeitei. Quem mandou continua vendo normal, só esperando.
+  const isPending = conversation.status === 'pending';
+  const isRequest = isPending && conversation.createdBy !== Number(userId);
+  const isOutgoingRequest = isPending && conversation.createdBy === Number(userId);
   return {
     id: conversation.id,
     type: conversation.type,
@@ -625,6 +638,8 @@ function buildConversationSummary(userId, conversation) {
     unread,
     pinned: me ? me.pinned : false,
     muted: me ? me.muted : false,
+    isRequest,
+    isOutgoingRequest,
     lastMessage,
     lastActivity: lastMessage ? lastMessage.createdAt : conversation.createdAt,
     createdAt: conversation.createdAt,
@@ -722,4 +737,5 @@ module.exports = {
   getReactionsForMessage,
   setPinned,
   setMuted,
+  setConversationStatus,
 };

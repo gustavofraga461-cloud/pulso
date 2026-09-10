@@ -222,7 +222,9 @@ app.post('/api/conversations', authRequired, (req, res) => {
     if (!other) return res.status(404).json({ error: 'usuario_nao_encontrado' });
     let convId = db.findPrivateConversation(req.user.id, otherId);
     if (!convId) {
-      convId = db.createConversation({ type: 'private', createdBy: req.user.id });
+      // Conversa nova entre duas pessoas de verdade (nunca é bot) começa como
+      // "pending" — só vira normal quando quem recebeu aceitar a solicitação.
+      convId = db.createConversation({ type: 'private', createdBy: req.user.id, status: other.isBot ? 'accepted' : 'pending' });
       db.addMember(convId, req.user.id, 1);
       db.addMember(convId, otherId, 1);
     }
@@ -323,6 +325,31 @@ app.delete('/api/conversations/:id', authRequired, (req, res) => {
   res.json({ ok: true });
 });
 
+app.put('/api/conversations/:id/accept', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  if (conv.status !== 'pending') return res.json({ conversation: conv });
+  if (conv.createdBy === req.user.id) return res.status(400).json({ error: 'operacao_invalida' });
+  db.setConversationStatus(conv.id, 'accepted');
+  const updated = db.getConversation(conv.id);
+  io.to(`conv:${conv.id}`).emit('conversation:accepted', { conversationId: conv.id });
+  emitConversationUpdate(conv.id);
+  res.json({ conversation: updated });
+});
+
+app.delete('/api/conversations/:id/reject', authRequired, (req, res) => {
+  const conv = db.getConversation(req.params.id);
+  if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
+  if (conv.status !== 'pending' || conv.createdBy === req.user.id) {
+    return res.status(400).json({ error: 'operacao_invalida' });
+  }
+  const memberIds = conv.members.map((m) => m.userId);
+  db.deleteConversation(conv.id);
+  io.to(`conv:${conv.id}`).emit('conversation:deleted', { conversationId: conv.id });
+  for (const uid of memberIds) syncUserRooms(uid);
+  res.json({ ok: true });
+});
+
 app.get('/api/conversations/:id/messages', authRequired, (req, res) => {
   const conv = db.getConversation(req.params.id);
   if (!conv || !db.isMember(conv.id, req.user.id)) return res.status(404).json({ error: 'conversa_nao_encontrada' });
@@ -339,6 +366,9 @@ app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
     const peerMember = conv.members.find((m) => m.userId !== req.user.id);
     if (peerMember && db.isBlockedEitherWay(req.user.id, peerMember.userId)) {
       return res.status(403).json({ error: 'bloqueado', message: 'Não é possível enviar mensagens nessa conversa.' });
+    }
+    if (conv.status === 'pending' && conv.createdBy !== req.user.id) {
+      return res.status(403).json({ error: 'solicitacao_pendente', message: 'Aceite a solicitação de mensagem antes de responder.' });
     }
   }
 

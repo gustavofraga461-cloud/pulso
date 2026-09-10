@@ -31,10 +31,25 @@ async function init() {
       const { user } = await API.me();
       App.token = token;
       App.me = user;
+      Storage.cacheMe(user);
       showApp();
       return;
-    } catch (_e) {
-      Storage.setToken(null);
+    } catch (err) {
+      if (err.status === 401) {
+        // sessão realmente inválida/expirada — aí sim precisa logar de novo
+        Storage.setToken(null);
+      } else {
+        // provavelmente é só falta de internet — não desloga à toa.
+        // Se tiver um perfil salvo, entra direto no app em modo offline.
+        const cachedMe = Storage.getCachedMe();
+        if (cachedMe) {
+          App.token = token;
+          App.me = cachedMe;
+          App.startedOffline = true;
+          showApp();
+          return;
+        }
+      }
     }
   }
   showAuth('login');
@@ -307,6 +322,22 @@ function showApp() {
       ),
       el('div', { class: 'messages', id: 'messages' }),
       el('div', { class: 'composer' },
+        el('div', { class: 'request-bar', id: 'requestBar', hidden: true },
+          el('p', { class: 'request-bar-text', text: 'Essa pessoa quer conversar com você' }),
+          el('div', { class: 'request-bar-actions' },
+            el('button', { class: 'request-btn request-btn-reject', id: 'btnRejectRequest', type: 'button' },
+              el('span', { class: 'request-btn-ico', html: ICONS.close }),
+              el('span', { text: 'Rejeitar' })
+            ),
+            el('button', { class: 'request-btn request-btn-accept', id: 'btnAcceptRequest', type: 'button' },
+              el('span', { class: 'request-btn-ico', text: '✓' }),
+              el('span', { text: 'Aceitar' })
+            )
+          )
+        ),
+        el('div', { class: 'outgoing-request-banner', id: 'outgoingRequestBanner', hidden: true },
+          el('span', { text: '📨 Solicitação enviada — aguardando resposta' })
+        ),
         el('div', { class: 'typing-banner', id: 'typingBanner', hidden: true }),
         el('div', { class: 'reply-preview', id: 'replyPreview', hidden: true },
           el('div', { class: 'reply-preview-bar' }),
@@ -316,7 +347,7 @@ function showApp() {
           ),
           el('button', { class: 'icon-btn', id: 'btnCancelReply', html: ICONS.close })
         ),
-        el('div', { class: 'composer-row' },
+        el('div', { class: 'composer-row', id: 'composerRow' },
           el('div', { class: 'emoji-wrap' },
             el('button', { class: 'icon-btn', id: 'btnEmoji', title: 'Emojis', html: ICONS.emoji }),
             el('div', { class: 'emoji-picker', id: 'emojiPicker', hidden: true })
@@ -367,6 +398,18 @@ function showApp() {
   setupBrowserNotifications();
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted') setupPush();
   openPendingConversation();
+
+  if (!App.offlineListenersWired) {
+    App.offlineListenersWired = true;
+    window.addEventListener('offline', () => setOfflineMode(true));
+    window.addEventListener('online', () => {
+      // volta a internet: recarrega tudo de verdade em vez de continuar
+      // mostrando os dados salvos localmente.
+      loadConversations();
+      if (App.activeConvId) loadMessages(App.activeConvId);
+    });
+    if (navigator.onLine === false) setOfflineMode(true);
+  }
 }
 
 function setupBrowserNotifications() {
@@ -570,12 +613,24 @@ async function loadConversations() {
     renderConversations();
     updateTitle();
     refreshNotifBadge();
+    Storage.cacheConversations(App.conversations);
+    setOfflineMode(false);
   } catch (err) {
     if (err.status === 401) {
       logout();
-    } else {
+      return;
+    }
+    // sem internet (ou servidor fora do ar) — mostra o que já tinha salvo antes
+    const cached = Storage.getCachedConversations();
+    if (cached) {
+      App.conversations = sortConversations(cached);
+      for (const c of cached) App.convMeta[c.id] = c;
+      renderConversations();
+      updateTitle();
+    } else if (App.conversations.length === 0) {
       toast(err.message, 'error');
     }
+    setOfflineMode(true);
   }
 }
 
@@ -635,10 +690,11 @@ function convItem(c, inSearch) {
         c.pinned && !isBotConv ? el('span', { class: 'conv-pin-ico', text: '📌' }) : null,
         el('span', { class: 'conv-name-text', text: c.name }),
         isBotConv ? el('span', { class: 'conv-bot-badge', text: 'IA' }) : null,
+        c.isRequest ? el('span', { class: 'conv-request-badge', text: 'Solicitação' }) : null,
         c.muted ? el('span', { class: 'conv-mute-ico', text: '🔇' }) : null
       ),
       el('div', { class: 'conv-last' + (c.unread ? ' unread' : '') + (typing ? ' typing' : ''),
-        text: typing ? 'digitando...' : messagePreviewText(lastMsg, App.me.id) })
+        text: typing ? 'digitando...' : (c.isRequest ? 'Quer te enviar uma mensagem' : (c.isOutgoingRequest ? 'Solicitação enviada' : messagePreviewText(lastMsg, App.me.id))) })
     ),
     el('div', { class: 'conv-right' },
       el('div', { class: 'conv-time', text: c.lastMessage ? formatConvTime(c.lastMessage.createdAt) : '' }),
@@ -743,13 +799,19 @@ function convSummaryFrom(conv) {
   const unread = 0;
   let peer = null;
   if (conv.type === 'private') peer = conv.members.find((m) => m.userId !== App.me.id) || null;
+  const me = conv.members.find((m) => m.userId === App.me.id);
+  const isPending = conv.status === 'pending';
   return {
     id: conv.id,
     type: conv.type,
     name: conv.type === 'group' ? conv.name : peer ? peer.displayName : 'Conversa',
     avatar: conv.type === 'group' ? conv.avatar : peer ? peer.avatar : '',
-    peer: peer ? { id: peer.userId, username: peer.username, online: peer.online, lastSeen: peer.lastSeen } : null,
+    peer: peer ? { id: peer.userId, username: peer.username, online: peer.online, lastSeen: peer.lastSeen, isBot: peer.isBot } : null,
     unread,
+    pinned: me ? me.pinned : false,
+    muted: me ? me.muted : false,
+    isRequest: isPending && conv.createdBy !== App.me.id,
+    isOutgoingRequest: isPending && conv.createdBy === App.me.id,
     lastMessage,
     lastActivity: lastMessage ? lastMessage.createdAt : conv.createdAt,
     createdAt: conv.createdAt,
@@ -758,6 +820,58 @@ function convSummaryFrom(conv) {
 }
 
 // ---------- opening a conversation ----------
+// ---------- solicitação de mensagem (aceitar/rejeitar) ----------
+function renderComposerState() {
+  const conv = App.convMeta[App.activeConvId];
+  const requestBar = document.getElementById('requestBar');
+  const outgoingBanner = document.getElementById('outgoingRequestBanner');
+  const composerRow = document.getElementById('composerRow');
+  if (!conv || !requestBar || !composerRow || !outgoingBanner) return;
+  if (conv.isRequest) {
+    requestBar.hidden = false;
+    composerRow.hidden = true;
+    outgoingBanner.hidden = true;
+  } else if (conv.isOutgoingRequest) {
+    requestBar.hidden = true;
+    composerRow.hidden = false;
+    outgoingBanner.hidden = false;
+  } else {
+    requestBar.hidden = true;
+    composerRow.hidden = false;
+    outgoingBanner.hidden = true;
+  }
+}
+
+function confirmRejectRequest(conv) {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Rejeitar solicitação' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.append(
+    el('div', { class: 'modal-body' },
+      el('p', { text: `Rejeitar a solicitação de ${conv.name}? A conversa e as mensagens serão apagadas.` })
+    ),
+    el('div', { class: 'modal-footer' },
+      el('button', { class: 'btn btn-block', text: 'Cancelar', onclick: () => closeModal(overlay) }),
+      el('button', {
+        class: 'btn btn-danger btn-block', text: 'Rejeitar',
+        onclick: async () => {
+          try {
+            await API.rejectRequest(conv.id);
+            closeModal(overlay);
+            removeConversationFromView(conv.id);
+            toast('Solicitação rejeitada');
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      })
+    )
+  );
+}
+
 async function openConversation(convId, opts = {}) {
   if (App.activeConvId === convId && !opts.force) {
     return;
@@ -795,6 +909,7 @@ async function openConversation(convId, opts = {}) {
 
   renderConversations();
   renderChatHeader();
+  renderComposerState();
   showChatView();
   applyWallpaper(convId);
   if (!App.messages[convId]) {
@@ -877,6 +992,8 @@ async function loadMessages(convId, beforeId) {
       App.hasMore[convId] = messages.length >= 50;
       renderMessages();
       scrollToBottom(true);
+      Storage.cacheMessages(convId, messages);
+      setOfflineMode(false);
     } else {
       App.messages[convId] = [...messages, ...(App.messages[convId] || [])];
       App.hasMore[convId] = messages.length >= 50;
@@ -887,7 +1004,21 @@ async function loadMessages(convId, beforeId) {
       ackRead(convId, last.id);
     }
   } catch (err) {
-    toast(err.message, 'error');
+    if (!beforeId) {
+      // sem internet — mostra as mensagens que já tinham sido salvas dessa conversa
+      const cached = Storage.getCachedMessages(convId);
+      if (cached) {
+        App.messages[convId] = cached;
+        App.hasMore[convId] = false;
+        renderMessages();
+        scrollToBottom(true);
+      } else {
+        toast(err.message, 'error');
+      }
+      setOfflineMode(true);
+    } else {
+      toast(err.message, 'error');
+    }
   } finally {
     App.loadingOlder[convId] = false;
   }
@@ -1551,7 +1682,10 @@ function handleConversationUpdate(summary) {
   else App.conversations.unshift(summary);
   App.convMeta[summary.id] = summary;
   renderConversations();
-  if (App.activeConvId === summary.id) renderChatHeader();
+  if (App.activeConvId === summary.id) {
+    renderChatHeader();
+    renderComposerState();
+  }
 }
 
 function handleConversationNew(data) {
@@ -1682,6 +1816,26 @@ function wireShellEvents() {
   document.getElementById('chatPeerBtn').addEventListener('click', openChatInfo);
 
   document.getElementById('btnCancelReply').addEventListener('click', clearReplyTarget);
+  document.getElementById('btnAcceptRequest').addEventListener('click', async () => {
+    const convId = App.activeConvId;
+    try {
+      const { conversation } = await API.acceptRequest(convId);
+      const summary = convSummaryFrom(conversation);
+      App.convMeta[convId] = summary;
+      const idx = App.conversations.findIndex((c) => c.id === convId);
+      if (idx >= 0) App.conversations[idx] = summary;
+      renderConversations();
+      renderComposerState();
+      toast('Conversa aceita');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  document.getElementById('btnRejectRequest').addEventListener('click', () => {
+    const conv = App.convMeta[App.activeConvId];
+    if (!conv) return;
+    confirmRejectRequest(conv);
+  });
 
   document.getElementById('btnEmoji').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2845,10 +2999,27 @@ function openWallpaperPicker(convId) {
 function showConnectionBanner(show) {
   let banner = document.getElementById('connBanner');
   if (!banner) {
-    banner = el('div', { id: 'connBanner', class: 'conn-banner', text: '📶 Sem conexão — reconectando...' });
+    banner = el('div', { id: 'connBanner', class: 'conn-banner' });
     document.body.appendChild(banner);
   }
+  if (show) banner.textContent = '📶 Sem conexão — reconectando...';
   banner.classList.toggle('show', show);
+}
+
+// true = está sem internet de verdade (não só o socket caiu por um instante).
+// Reaproveita o mesmo aviso, mas com um texto que deixa claro que dá pra
+// continuar lendo as mensagens já salvas.
+function setOfflineMode(isOffline) {
+  App.isOffline = isOffline;
+  let banner = document.getElementById('connBanner');
+  if (!banner) {
+    banner = el('div', { id: 'connBanner', class: 'conn-banner' });
+    document.body.appendChild(banner);
+  }
+  if (isOffline) {
+    banner.textContent = '📴 Sem internet — mostrando mensagens salvas';
+  }
+  banner.classList.toggle('show', isOffline);
 }
 
 // ---------- busca dentro da conversa ----------

@@ -22,6 +22,25 @@ const Storage = {
     localStorage.removeItem('pulse_pending_conv');
     return v;
   },
+  // ---------- cache offline (pra dar pra ler mensagens sem internet) ----------
+  cacheMe(user) {
+    try { localStorage.setItem('pulse_cache_me', JSON.stringify(user)); } catch (e) { /* armazenamento cheio, ignora */ }
+  },
+  getCachedMe() {
+    try { return JSON.parse(localStorage.getItem('pulse_cache_me') || 'null'); } catch (e) { return null; }
+  },
+  cacheConversations(list) {
+    try { localStorage.setItem('pulse_cache_conversations', JSON.stringify(list)); } catch (e) { /* ignora */ }
+  },
+  getCachedConversations() {
+    try { return JSON.parse(localStorage.getItem('pulse_cache_conversations') || 'null'); } catch (e) { return null; }
+  },
+  cacheMessages(convId, messages) {
+    try { localStorage.setItem('pulse_cache_msgs_' + convId, JSON.stringify(messages)); } catch (e) { /* ignora */ }
+  },
+  getCachedMessages(convId) {
+    try { return JSON.parse(localStorage.getItem('pulse_cache_msgs_' + convId) || 'null'); } catch (e) { return null; }
+  },
 };
 
 class ApiError extends Error {
@@ -141,6 +160,12 @@ const API = {
   },
   deleteConversation(conversationId) {
     return this.request('DELETE', `/api/conversations/${conversationId}`);
+  },
+  acceptRequest(conversationId) {
+    return this.put(`/api/conversations/${conversationId}/accept`);
+  },
+  rejectRequest(conversationId) {
+    return this.request('DELETE', `/api/conversations/${conversationId}/reject`);
   },
   blockUser(userId) {
     return this.post(`/api/users/${userId}/block`);
