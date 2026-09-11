@@ -286,6 +286,11 @@ function showApp() {
         el('span', { class: 'newchat-ico', html: ICONS.plus }),
         el('span', { class: 'newchat-txt', text: 'Nova conversa ou grupo' })
       ),
+      el('button', { class: 'requests-entry', id: 'btnRequests', hidden: true },
+        el('span', { class: 'requests-entry-ico', text: '📨' }),
+        el('span', { class: 'requests-entry-label', text: 'Solicitações de mensagem' }),
+        el('span', { class: 'requests-entry-count', id: 'requestsCount' })
+      ),
       el('nav', { class: 'conv-list', id: 'convList' }, ...skeletonConvItems(6))
     ),
     el('div', { class: 'sidebar-footer' },
@@ -644,10 +649,12 @@ function renderConversations() {
   const q = App.searchQuery.trim().toLowerCase();
   list.innerHTML = '';
 
+  updateRequestsEntry();
+
   const results = el('div', { class: 'search-results', id: 'searchResults' });
 
   if (q) {
-    const convMatches = App.conversations.filter((c) => (c.name || '').toLowerCase().includes(q));
+    const convMatches = App.conversations.filter((c) => !c.isRequest && (c.name || '').toLowerCase().includes(q));
     const userMatches = App.userResults;
     if (convMatches.length) {
       results.append(el('div', { class: 'search-section' }, el('h4', { class: 'search-head', text: 'Conversas' })));
@@ -664,12 +671,23 @@ function renderConversations() {
     return;
   }
 
-  if (!App.conversations.length) {
+  const visible = App.conversations.filter((c) => !c.isRequest);
+
+  if (!visible.length) {
     list.append(el('div', { class: 'list-empty', text: 'Nenhuma conversa ainda. Toque em "Nova conversa" para começar.' }));
     return;
   }
 
-  for (const c of App.conversations) list.append(convItem(c, false));
+  for (const c of visible) list.append(convItem(c, false));
+}
+
+function updateRequestsEntry() {
+  const btn = document.getElementById('btnRequests');
+  const countEl = document.getElementById('requestsCount');
+  if (!btn || !countEl) return;
+  const requests = App.conversations.filter((c) => c.isRequest);
+  btn.hidden = requests.length === 0;
+  countEl.textContent = requests.length ? String(requests.length) : '';
 }
 
 function convItem(c, inSearch) {
@@ -821,6 +839,82 @@ function convSummaryFrom(conv) {
 
 // ---------- opening a conversation ----------
 // ---------- solicitação de mensagem (aceitar/rejeitar) ----------
+// ---------- página de solicitações de mensagem ----------
+function openMessageRequestsModal() {
+  const { overlay, box } = modal(
+    el('div', { class: 'modal-head' },
+      el('h3', { class: 'modal-title', text: 'Solicitações de mensagem' }),
+      el('button', { class: 'icon-btn', onclick: () => closeModal(overlay), html: ICONS.close })
+    )
+  );
+  box.classList.add('requests-modal');
+
+  const listEl = el('div', { class: 'requests-list' });
+  const renderList = () => {
+    listEl.innerHTML = '';
+    const requests = App.conversations.filter((c) => c.isRequest);
+    if (!requests.length) {
+      closeModal(overlay);
+      return;
+    }
+    for (const c of requests) listEl.append(requestRowEl(c, renderList, overlay));
+  };
+  renderList();
+
+  box.append(el('div', { class: 'modal-body requests-modal-body' }, listEl));
+}
+
+function requestRowEl(c, onChange, overlay) {
+  const row = el('div', { class: 'request-row' },
+    el('div', { class: 'request-row-click' },
+      avatarEl({ avatar: c.avatar, displayName: c.name, username: (c.peer && c.peer.username) || '' }, 46),
+      el('div', { class: 'request-row-mid' },
+        el('div', { class: 'request-row-name', text: c.name }),
+        el('div', { class: 'request-row-preview', text: messagePreviewText(c.lastMessage, App.me.id) })
+      )
+    ),
+    el('div', { class: 'request-row-actions' },
+      el('button', { class: 'request-btn request-btn-reject request-btn-sm', type: 'button' },
+        el('span', { class: 'request-btn-ico', html: ICONS.close })
+      ),
+      el('button', { class: 'request-btn request-btn-accept request-btn-sm', type: 'button' },
+        el('span', { class: 'request-btn-ico', text: '✓' })
+      )
+    )
+  );
+
+  row.querySelector('.request-row-click').addEventListener('click', () => {
+    closeModal(overlay);
+    openConversation(c.id);
+  });
+
+  const [rejectBtn, acceptBtn] = row.querySelectorAll('.request-btn');
+  acceptBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      const { conversation } = await API.acceptRequest(c.id);
+      handleConversationUpdate(convSummaryFrom(conversation));
+      toast('Conversa aceita');
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+  rejectBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      await API.rejectRequest(c.id);
+      removeConversationFromView(c.id);
+      toast('Solicitação rejeitada');
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  return row;
+}
+
 function renderComposerState() {
   const conv = App.convMeta[App.activeConvId];
   const requestBar = document.getElementById('requestBar');
@@ -1742,6 +1836,7 @@ function wireShellEvents() {
 
   const btnNewChat = document.getElementById('btnNewChat');
   btnNewChat.addEventListener('click', openNewChatModal);
+  document.getElementById('btnRequests').addEventListener('click', openMessageRequestsModal);
 
   const btnNotif = document.getElementById('btnNotif');
   btnNotif.addEventListener('click', (e) => {

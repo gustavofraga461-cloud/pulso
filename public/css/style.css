@@ -594,6 +594,104 @@ textarea {
   display: inline-flex;
 }
 
+/* entrada da caixinha de solicitações de mensagem, acima da lista */
+.requests-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(249, 115, 22, 0.1));
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #f59e0b;
+  font-weight: 700;
+  font-size: 13.5px;
+  transition: all 0.15s ease;
+}
+.requests-entry:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(249, 115, 22, 0.16));
+  transform: translateY(-1px);
+}
+.requests-entry-ico {
+  font-size: 16px;
+}
+.requests-entry-label {
+  flex: 1;
+  text-align: left;
+}
+.requests-entry-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #f59e0b;
+  color: #1a1200;
+  font-size: 11.5px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* modal com a lista de solicitações */
+.requests-modal-body {
+  padding: 8px 14px 16px;
+}
+.requests-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.request-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  transition: background 0.12s ease;
+}
+.request-row:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+.request-row-click {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.request-row-mid {
+  min-width: 0;
+}
+.request-row-name {
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.request-row-preview {
+  font-size: 12.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.request-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.request-btn-sm {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+}
+
 /* conversation list */
 .conv-list {
   flex: 1;
