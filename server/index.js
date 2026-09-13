@@ -670,6 +670,52 @@ io.on('connection', (socket) => {
       }
     }
   });
+
+  // ---------- ligação de voz (sinalização WebRTC) ----------
+  // O servidor só repassa as mensagens entre quem liga e quem recebe —
+  // o áudio em si viaja direto entre os dois aparelhos (peer-to-peer),
+  // nunca passa pelo servidor.
+  socket.on('call:offer', (data) => {
+    const toUserId = Number(data.toUserId);
+    const conversationId = Number(data.conversationId);
+    if (!toUserId || !conversationId || !db.isMember(conversationId, userId) || !db.isMember(conversationId, toUserId)) return;
+    if (!presence.has(toUserId)) {
+      socket.emit('call:unavailable', { toUserId, conversationId });
+      return;
+    }
+    const caller = db.getUserById(userId);
+    io.to(`user:${toUserId}`).emit('call:offer', {
+      fromUserId: userId,
+      fromName: caller ? caller.displayName : 'Alguém',
+      fromAvatar: caller ? caller.avatar : '',
+      conversationId,
+      sdp: data.sdp,
+    });
+  });
+
+  socket.on('call:answer', (data) => {
+    const toUserId = Number(data.toUserId);
+    if (!toUserId) return;
+    io.to(`user:${toUserId}`).emit('call:answer', { fromUserId: userId, sdp: data.sdp });
+  });
+
+  socket.on('call:ice', (data) => {
+    const toUserId = Number(data.toUserId);
+    if (!toUserId || !data.candidate) return;
+    io.to(`user:${toUserId}`).emit('call:ice', { fromUserId: userId, candidate: data.candidate });
+  });
+
+  socket.on('call:decline', (data) => {
+    const toUserId = Number(data.toUserId);
+    if (!toUserId) return;
+    io.to(`user:${toUserId}`).emit('call:decline', { fromUserId: userId });
+  });
+
+  socket.on('call:end', (data) => {
+    const toUserId = Number(data.toUserId);
+    if (!toUserId) return;
+    io.to(`user:${toUserId}`).emit('call:end', { fromUserId: userId });
+  });
 });
 
 // ---------- SPA fallback ----------

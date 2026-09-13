@@ -1,6 +1,9 @@
 'use strict';
 
 const ICONS = {
+  phone: `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.362 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>`,
+  phoneEnd: `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M12 9c-2.7 0-5.3.5-7.6 1.5a1.5 1.5 0 00-.83 1.86l1 3a1.5 1.5 0 001.6 1.02c.98-.14 1.98-.22 2.83-.7.4-.23.66-.63.7-1.08l.16-1.66a10.6 10.6 0 014.28 0l.16 1.66c.04.45.3.85.7 1.08.85.48 1.85.56 2.83.7a1.5 1.5 0 001.6-1.02l1-3a1.5 1.5 0 00-.83-1.86A19.9 19.9 0 0012 9z"/></svg>`,
+  micOff: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1l22 22"/><path d="M9 9v3a3 3 0 004.6 2.55M15 9.34V5a3 3 0 00-5.94-.6"/><path d="M17 16.95A7 7 0 015 12v-2"/><path d="M19 10v2a7 7 0 01-.11 1.23"/><path d="M12 19v3"/></svg>`,
   download: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>`,
   logo: `<img src="/icons/logo-mark.png" alt="Pulse" />`,
   send: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.5-7.5a1 1 0 000-1.8L3.4 3.6a1 1 0 00-1.39 1.2l1.8 6.2-1.8 6.2a1 1 0 001.39 1.2z"/><path d="M4 11h5a1 1 0 010 2H4z" fill="#080c16"/></svg>`,
