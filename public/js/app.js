@@ -3153,6 +3153,7 @@ function openSettingsModal() {
     form,
     buildThemePicker(),
     buildSoundToggle(),
+    buildAutomationSection(),
     el('div', { class: 'settings-danger-zone' },
       el('button', { class: 'btn btn-block', text: 'Sair da conta', onclick: () => { closeModal(overlay); logout(); } }),
       el('button', {
@@ -3160,6 +3161,165 @@ function openSettingsModal() {
         onclick: () => { closeModal(overlay); confirmDeleteAccount(); },
       })
     )
+  );
+}
+
+// ---------- automação (bot de loja / script custom) ----------
+function buildAutomationSection() {
+  const container = el('div', { class: 'settings-section automation-section' },
+    el('label', { class: 'field-label', text: 'Automação (bot)' }),
+    el('p', { class: 'hint', text: 'Carregando...' })
+  );
+
+  API.getAutomation()
+    .then(({ automation, presets }) => renderAutomationBody(container, automation, presets))
+    .catch(() => {
+      container.innerHTML = '';
+      container.append(
+        el('label', { class: 'field-label', text: 'Automação (bot)' }),
+        el('p', { class: 'hint', text: 'Não foi possível carregar as automações agora.' })
+      );
+    });
+
+  return container;
+}
+
+function renderAutomationBody(container, automation, presets) {
+  container.innerHTML = '';
+
+  const state = {
+    enabled: automation.enabled,
+    mode: automation.mode || 'preset',
+    presetId: automation.presetId || (presets[0] && presets[0].id) || '',
+    rules: automation.rules && automation.rules.length ? automation.rules : [{ pattern: '', response: '' }],
+    defaultReply: automation.defaultReply || '',
+    replyInGroups: automation.replyInGroups || 'mention',
+  };
+
+  const toggleLabel = el('span', { class: 'sound-toggle-label', text: state.enabled ? 'Automação ativada' : 'Automação desativada' });
+  const toggleBtn = el('button', {
+    class: 'sound-toggle' + (state.enabled ? ' active' : ''),
+    type: 'button',
+    onclick: () => {
+      state.enabled = !state.enabled;
+      toggleBtn.classList.toggle('active');
+      toggleLabel.textContent = state.enabled ? 'Automação ativada' : 'Automação desativada';
+      body.hidden = !state.enabled;
+    },
+  }, el('span', { class: 'sound-toggle-knob' }), toggleLabel);
+
+  const modeSelect = el('select', { class: 'input' },
+    el('option', { value: 'preset', text: 'Usar bot pronto da loja' }),
+    el('option', { value: 'custom', text: 'Meu script customizado' })
+  );
+  modeSelect.value = state.mode;
+
+  const presetSelect = el('select', { class: 'input' },
+    ...presets.map((p) => el('option', { value: p.id, text: p.label }))
+  );
+  presetSelect.value = state.presetId;
+  const presetDesc = el('p', { class: 'hint', text: (presets.find((p) => p.id === state.presetId) || {}).description || '' });
+  presetSelect.addEventListener('change', () => {
+    state.presetId = presetSelect.value;
+    presetDesc.textContent = (presets.find((p) => p.id === state.presetId) || {}).description || '';
+  });
+  const presetBlock = el('div', { class: 'field' },
+    el('label', { class: 'field-label', text: 'Bot pronto' }),
+    presetSelect,
+    presetDesc
+  );
+
+  const rulesList = el('div', { class: 'automation-rules-list' });
+  function renderRules() {
+    rulesList.innerHTML = '';
+    state.rules.forEach((rule, idx) => {
+      const patternInput = el('input', { class: 'input', placeholder: 'Se a mensagem tiver...', value: rule.pattern });
+      const responseInput = el('input', { class: 'input', placeholder: 'Responder com...', value: rule.response });
+      patternInput.addEventListener('input', () => { rule.pattern = patternInput.value; });
+      responseInput.addEventListener('input', () => { rule.response = responseInput.value; });
+      const removeBtn = el('button', {
+        class: 'icon-btn', type: 'button', title: 'Remover regra', html: ICONS.close,
+        onclick: () => { state.rules.splice(idx, 1); if (!state.rules.length) state.rules.push({ pattern: '', response: '' }); renderRules(); },
+      });
+      rulesList.append(el('div', { class: 'automation-rule-row' }, patternInput, responseInput, removeBtn));
+    });
+  }
+  renderRules();
+
+  const addRuleBtn = el('button', {
+    class: 'btn btn-block', type: 'button', text: '+ Adicionar regra',
+    onclick: () => { if (state.rules.length < 30) { state.rules.push({ pattern: '', response: '' }); renderRules(); } },
+  });
+
+  const defaultReplyInput = el('textarea', {
+    class: 'input textarea', rows: 2, maxlength: 300,
+    placeholder: 'Resposta padrão quando nenhuma regra bater (deixe vazio pra não responder)',
+    value: state.defaultReply,
+  });
+  defaultReplyInput.addEventListener('input', () => { state.defaultReply = defaultReplyInput.value; });
+
+  const customBlock = el('div', { class: 'field' },
+    el('label', { class: 'field-label', text: 'Regras (se a mensagem contiver X, responda Y)' }),
+    rulesList,
+    addRuleBtn,
+    el('label', { class: 'field-label', text: 'Resposta padrão' }),
+    defaultReplyInput
+  );
+
+  function syncModeVisibility() {
+    presetBlock.hidden = state.mode !== 'preset';
+    customBlock.hidden = state.mode !== 'custom';
+  }
+  syncModeVisibility();
+  modeSelect.addEventListener('change', () => { state.mode = modeSelect.value; syncModeVisibility(); });
+
+  const groupsSelect = el('select', { class: 'input' },
+    el('option', { value: 'off', text: 'Nunca responder em grupos' }),
+    el('option', { value: 'mention', text: 'Só quando me marcarem (@usuário) no grupo' }),
+    el('option', { value: 'all', text: 'Responder toda mensagem em grupos' })
+  );
+  groupsSelect.value = state.replyInGroups;
+  groupsSelect.addEventListener('change', () => { state.replyInGroups = groupsSelect.value; });
+
+  const saveBtn = el('button', {
+    class: 'btn btn-primary btn-block', type: 'button', text: 'Salvar automação',
+    onclick: async () => {
+      try {
+        const { automation: saved } = await API.updateAutomation({
+          enabled: state.enabled,
+          mode: state.mode,
+          presetId: state.presetId,
+          rules: state.rules,
+          defaultReply: state.defaultReply,
+          replyInGroups: state.replyInGroups,
+        });
+        toast('Automação salva');
+        renderAutomationBody(container, saved, presets);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+  });
+
+  const body = el('div', { class: 'automation-body', hidden: !state.enabled },
+    el('div', { class: 'field' },
+      el('label', { class: 'field-label', text: 'Modo' }),
+      modeSelect
+    ),
+    presetBlock,
+    customBlock,
+    el('div', { class: 'field' },
+      el('label', { class: 'field-label', text: 'Em grupos' }),
+      groupsSelect
+    ),
+    saveBtn
+  );
+
+  container.append(
+    el('label', { class: 'field-label', text: 'Automação (bot)' }),
+    el('p', { class: 'hint', text: 'Responde sozinho quando alguém te manda mensagem — escolha um bot pronto ou monte suas próprias regras.' }),
+    toggleBtn,
+    body
   );
 }
 

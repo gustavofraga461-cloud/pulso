@@ -182,6 +182,12 @@ const API = {
   deleteMyAccount() {
     return this.request('DELETE', '/api/users/me');
   },
+  getAutomation() {
+    return this.request('GET', '/api/automation');
+  },
+  updateAutomation(fields) {
+    return this.request('PUT', '/api/automation', fields);
+  },
   upload(file, filename) {
     const fd = new FormData();
     if (filename) fd.append('file', file, filename);

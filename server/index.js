@@ -11,6 +11,7 @@ const { Server } = require('socket.io');
 const db = require('./db');
 const push = require('./push');
 const ai = require('./ai');
+const bots = require('./bots');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -390,7 +391,75 @@ app.post('/api/conversations/:id/messages', authRequired, (req, res) => {
   res.status(201).json({ message: payload });
 
   maybeReplyAsBot(conv, req.user.id);
+  if (type === 'text') maybeReplyWithAutomation(conv, payload, req.user.id, content);
 });
+
+// ---------- automação: bot de loja / script custom por usuário ----------
+app.get('/api/automation', authRequired, (req, res) => {
+  res.json({ automation: db.getAutomation(req.user.id), presets: bots.listPresets() });
+});
+
+app.put('/api/automation', authRequired, (req, res) => {
+  const body = req.body || {};
+  const mode = body.mode === 'custom' ? 'custom' : 'preset';
+  const presetId = mode === 'preset' ? String(body.presetId || '') : '';
+  if (mode === 'preset' && presetId && !bots.PRESETS[presetId]) {
+    return res.status(400).json({ error: 'preset_invalido' });
+  }
+  const rules = mode === 'custom' ? bots.sanitizeRules(body.rules) : [];
+  const defaultReply = mode === 'custom' ? String(body.defaultReply || '').slice(0, bots.MAX_RULE_LENGTH) : '';
+  const replyInGroups = ['off', 'mention', 'all'].includes(body.replyInGroups) ? body.replyInGroups : 'mention';
+  const automation = db.saveAutomation(req.user.id, {
+    enabled: !!body.enabled,
+    mode,
+    presetId,
+    rules,
+    defaultReply,
+    replyInGroups,
+  });
+  res.json({ automation });
+});
+
+// Avalia, pra cada outro membro da conversa, se a automação dele deve
+// responder a essa mensagem que acabou de chegar. Roda depois de responder
+// o HTTP normal, e não é chamada de novo pra mensagens geradas por ela mesma
+// — então não tem risco de loop entre duas automações se respondendo.
+function maybeReplyWithAutomation(conversation, message, fromUserId, textContent) {
+  if (!message) return;
+  const isGroup = conversation.type !== 'private';
+  const others = conversation.members.filter((m) => Number(m.userId) !== Number(fromUserId));
+
+  for (const member of others) {
+    const automation = db.getAutomation(member.userId);
+    if (!automation.enabled) continue;
+
+    const target = db.getUserById(member.userId);
+    if (!target) continue;
+    const mentioned = isGroup && new RegExp(`(^|\\s)@${target.username}\\b`, 'i').test(textContent);
+
+    const replyText = bots.pickResponse(automation, textContent, { isGroup, mentioned });
+    if (!replyText) continue;
+
+    const room = `conv:${conversation.id}`;
+    io.to(room).emit('typing', { conversationId: conversation.id, userId: member.userId, isTyping: true });
+
+    setTimeout(() => {
+      try {
+        db.addMessage(conversation.id, member.userId, 'text', replyText);
+        const replyPayload = db.getLastMessage(conversation.id);
+        if (replyPayload) {
+          io.to(room).emit('message:new', replyPayload);
+          const freshConv = db.getConversation(conversation.id);
+          pushMessageToRecipients(freshConv, replyPayload, member.userId);
+        }
+      } catch (err) {
+        console.error('Falha ao enviar resposta de automação:', err.message);
+      } finally {
+        io.to(room).emit('typing', { conversationId: conversation.id, userId: member.userId, isTyping: false });
+      }
+    }, 900 + Math.floor(Math.random() * 700));
+  }
+}
 
 // ---------- bot FragaIA: gera e envia a resposta da IA ----------
 function maybeReplyAsBot(conversation, fromUserId) {

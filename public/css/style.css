@@ -2462,3 +2462,31 @@ textarea {
     left: -40px;
   }
 }
+
+/* ============ Automação (bots) ============ */
+.hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.automation-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+.automation-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.automation-rule-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.automation-rule-row .input {
+  min-width: 0;
+}

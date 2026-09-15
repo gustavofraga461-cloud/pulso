@@ -74,6 +74,17 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
 
+  CREATE TABLE IF NOT EXISTS automations (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'preset',
+    preset_id TEXT NOT NULL DEFAULT '',
+    rules_json TEXT NOT NULL DEFAULT '[]',
+    default_reply TEXT NOT NULL DEFAULT '',
+    reply_in_groups TEXT NOT NULL DEFAULT 'mention',
+    updated_at INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS blocked_users (
     blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -683,6 +694,58 @@ function getPushSubscriptionsByUser(userId) {
     .map((r) => ({ endpoint: r.endpoint, keys: { p256dh: r.keys_p256dh, auth: r.keys_auth } }));
 }
 
+// ---------- automação (bots por usuário) ----------
+function getAutomation(userId) {
+  const row = db.prepare('SELECT * FROM automations WHERE user_id = ?').get(Number(userId));
+  if (!row) {
+    return {
+      userId: Number(userId),
+      enabled: false,
+      mode: 'preset',
+      presetId: '',
+      rules: [],
+      defaultReply: '',
+      replyInGroups: 'mention',
+    };
+  }
+  let rules = [];
+  try { rules = JSON.parse(row.rules_json) || []; } catch (e) { rules = []; }
+  return {
+    userId: Number(row.user_id),
+    enabled: !!row.enabled,
+    mode: row.mode,
+    presetId: row.preset_id,
+    rules,
+    defaultReply: row.default_reply,
+    replyInGroups: row.reply_in_groups,
+  };
+}
+
+function saveAutomation(userId, { enabled, mode, presetId, rules, defaultReply, replyInGroups }) {
+  db.prepare(`
+    INSERT INTO automations (user_id, enabled, mode, preset_id, rules_json, default_reply, reply_in_groups, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      mode = excluded.mode,
+      preset_id = excluded.preset_id,
+      rules_json = excluded.rules_json,
+      default_reply = excluded.default_reply,
+      reply_in_groups = excluded.reply_in_groups,
+      updated_at = excluded.updated_at
+  `).run(
+    Number(userId),
+    enabled ? 1 : 0,
+    mode === 'custom' ? 'custom' : 'preset',
+    String(presetId || ''),
+    JSON.stringify(Array.isArray(rules) ? rules : []),
+    String(defaultReply || ''),
+    ['off', 'mention', 'all'].includes(replyInGroups) ? replyInGroups : 'mention',
+    now()
+  );
+  return getAutomation(userId);
+}
+
 module.exports = {
   now,
   getUserById,
@@ -732,6 +795,8 @@ module.exports = {
   addReport,
   deleteAccount,
   editMessage,
+  getAutomation,
+  saveAutomation,
   setReaction,
   removeReaction,
   getReactionsForMessage,
