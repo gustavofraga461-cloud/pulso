@@ -1,11 +1,11 @@
-const CACHE = 'pulse-v12';
+const CACHE = 'pulse-v13';
 const PRECACHE = [
   '/',
-  '/css/style.css?v=12',
-  '/js/utils.js?v=12',
-  '/js/ui.js?v=12',
-  '/js/api.js?v=12',
-  '/js/app.js?v=12',
+  '/css/style.css?v=13',
+  '/js/utils.js?v=13',
+  '/js/ui.js?v=13',
+  '/js/api.js?v=13',
+  '/js/app.js?v=13',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -34,26 +34,59 @@ self.addEventListener('push', (event) => {
     data = event.data ? event.data.json() : {};
   } catch (err) {}
   const title = data.title || 'Pulse';
+  const isCall = !!data.isCall;
   const options = {
     body: data.body || '',
     icon: data.icon || '/icons/icon-192.png',
     badge: data.badge || '/icons/icon-192.png',
-    tag: 'pulse-conv-' + (data.conversationId || ''),
-    data: { url: '/?conv=' + (data.conversationId || ''), conversationId: data.conversationId || null },
+    tag: isCall ? 'pulse-call-' + (data.conversationId || '') : 'pulse-conv-' + (data.conversationId || ''),
+    data: {
+      url: '/?conv=' + (data.conversationId || ''),
+      conversationId: data.conversationId || null,
+      isCall,
+      fromUserId: data.fromUserId || null,
+    },
     renotify: true,
-    vibrate: [120, 60, 120],
+    // "requireInteraction" mantém a notificação de ligação na tela até a
+    // pessoa tocar em algo, em vez de sumir sozinha em poucos segundos.
+    requireInteraction: isCall,
+    vibrate: isCall ? [400, 200, 400, 200, 400, 200, 400] : [120, 60, 120],
   };
+  if (isCall) {
+    options.actions = [
+      { action: 'accept', title: '✅ Atender' },
+      { action: 'decline', title: '❌ Recusar' },
+    ];
+  }
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || '/';
+  const data = event.notification.data || {};
+
+  if (data.isCall) {
+    const action = event.action === 'decline' ? 'decline' : 'accept';
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
+        for (const client of clientsArr) {
+          if ('focus' in client) {
+            client.postMessage({ type: 'call-action', action, conversationId: data.conversationId, fromUserId: data.fromUserId });
+            return client.focus();
+          }
+        }
+        return self.clients.openWindow(`/?callAction=${action}&from=${data.fromUserId || ''}`);
+      })
+    );
+    return;
+  }
+
+  const target = (data && data.url) || '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          client.postMessage({ type: 'open-conversation', conversationId: event.notification.data.conversationId });
+          client.postMessage({ type: 'open-conversation', conversationId: data.conversationId });
           return client.focus();
         }
       }

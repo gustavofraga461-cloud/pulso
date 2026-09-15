@@ -585,6 +585,15 @@ function pushMessageToRecipients(conversation, payload, excludeUserId) {
 
 // ---------- Presence ----------
 const presence = new Map(); // userId -> Set<socketId>
+const pendingCalls = new Map(); // calleeUserId -> { fromUserId, fromName, fromAvatar, conversationId, sdp, timeoutHandle }
+
+function clearPendingCall(calleeId) {
+  const p = pendingCalls.get(calleeId);
+  if (p) {
+    clearTimeout(p.timeoutHandle);
+    pendingCalls.delete(calleeId);
+  }
+}
 
 function syncUserRooms(userId) {
   const sockets = io.of('/').sockets;
@@ -637,6 +646,20 @@ io.on('connection', (socket) => {
   db.setUserPresence(userId, true);
   io.emit('presence', { userId, online: true });
 
+  // Se essa pessoa tinha uma ligação chegando enquanto o app estava fechado
+  // (por isso ela abriu agora, provavelmente pela notificação), reenvia a
+  // oferta pra ela ver a tela de atender/recusar na hora.
+  const pendingCall = pendingCalls.get(userId);
+  if (pendingCall) {
+    socket.emit('call:offer', {
+      fromUserId: pendingCall.fromUserId,
+      fromName: pendingCall.fromName,
+      fromAvatar: pendingCall.fromAvatar,
+      conversationId: pendingCall.conversationId,
+      sdp: pendingCall.sdp,
+    });
+  }
+
   socket.on('typing', (data) => {
     const conversationId = Number(data.conversationId);
     if (!conversationId || !db.isMember(conversationId, userId)) return;
@@ -684,18 +707,52 @@ io.on('connection', (socket) => {
       return;
     }
     const caller = db.getUserById(userId);
+    const callerName = caller ? caller.displayName : 'Alguém';
+    const callerAvatar = caller ? caller.avatar : '';
+
     io.to(`user:${toUserId}`).emit('call:offer', {
       fromUserId: userId,
-      fromName: caller ? caller.displayName : 'Alguém',
-      fromAvatar: caller ? caller.avatar : '',
+      fromName: callerName,
+      fromAvatar: callerAvatar,
       conversationId,
       sdp: data.sdp,
     });
+
+    // Guarda a ligação por até 45s pra poder reenviar caso a pessoa abra o
+    // app pela notificação em vez de já estar com ele aberto.
+    clearPendingCall(toUserId);
+    const timeoutHandle = setTimeout(() => pendingCalls.delete(toUserId), 45000);
+    pendingCalls.set(toUserId, {
+      fromUserId: userId,
+      fromName: callerName,
+      fromAvatar: callerAvatar,
+      conversationId,
+      sdp: data.sdp,
+      timeoutHandle,
+    });
+
+    // Notificação push com botões de Atender/Recusar — é o mais perto que dá
+    // de "tocar mesmo com o app fechado" num app instalado assim (PWA).
+    // Nenhum app desse tipo consegue abrir por cima da tela travada sozinho
+    // sem virar um app nativo de verdade.
+    const subs = db.getPushSubscriptionsByUser(toUserId);
+    for (const sub of subs) {
+      push.sendPush(sub, {
+        title: `📞 Ligação de ${callerName}`,
+        body: 'Toque para atender',
+        isCall: true,
+        fromUserId: userId,
+        conversationId,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+      });
+    }
   });
 
   socket.on('call:answer', (data) => {
     const toUserId = Number(data.toUserId);
     if (!toUserId) return;
+    clearPendingCall(userId);
     io.to(`user:${toUserId}`).emit('call:answer', { fromUserId: userId, sdp: data.sdp });
   });
 
@@ -708,12 +765,15 @@ io.on('connection', (socket) => {
   socket.on('call:decline', (data) => {
     const toUserId = Number(data.toUserId);
     if (!toUserId) return;
+    clearPendingCall(userId);
     io.to(`user:${toUserId}`).emit('call:decline', { fromUserId: userId });
   });
 
   socket.on('call:end', (data) => {
     const toUserId = Number(data.toUserId);
     if (!toUserId) return;
+    clearPendingCall(userId);
+    clearPendingCall(toUserId);
     io.to(`user:${toUserId}`).emit('call:end', { fromUserId: userId });
   });
 });

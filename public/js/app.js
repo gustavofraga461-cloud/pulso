@@ -24,6 +24,7 @@ const App = {
 
 // ---------- boot ----------
 async function init() {
+  readPendingCallActionFromUrl();
   wirePushService();
   const token = Storage.getToken();
   if (token) {
@@ -355,8 +356,7 @@ function showApp() {
         ),
         el('div', { class: 'composer-row', id: 'composerRow' },
           el('div', { class: 'emoji-wrap' },
-            el('button', { class: 'icon-btn', id: 'btnEmoji', title: 'Emojis', html: ICONS.emoji }),
-            el('div', { class: 'emoji-picker', id: 'emojiPicker', hidden: true })
+            el('button', { class: 'icon-btn', id: 'btnEmoji', title: 'Emojis', html: ICONS.emoji })
           ),
           el('div', { class: 'attach-wrap' },
             el('button', { class: 'icon-btn', id: 'btnAttach', title: 'Anexar', html: ICONS.attach }),
@@ -389,7 +389,8 @@ function showApp() {
           ),
           el('button', { class: 'icon-btn send-btn', id: 'btnSend', title: 'Enviar', hidden: true, html: ICONS.send }),
           el('button', { class: 'icon-btn mic-btn', id: 'btnMic', title: 'Gravar áudio', html: ICONS.mic })
-        )
+        ),
+        el('div', { class: 'emoji-picker', id: 'emojiPicker', hidden: true })
       )
     )
   );
@@ -491,7 +492,39 @@ function wirePushService() {
         Storage.setPendingConv(data.conversationId);
       }
     }
+    if (data.type === 'call-action') {
+      App.pendingCallAction = data.action;
+      App.pendingCallFrom = Number(data.fromUserId) || null;
+      tryConsumePendingCallAction();
+    }
   });
+}
+
+// Quando a pessoa toca em "Atender"/"Recusar" direto na notificação e o app
+// estava fechado, ele abre com ?callAction=accept&from=123 na URL — lê isso
+// aqui pra saber o que fazer assim que a ligação (reenviada pelo servidor) chegar.
+function readPendingCallActionFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const action = params.get('callAction');
+  const from = params.get('from');
+  if (action) {
+    App.pendingCallAction = action;
+    App.pendingCallFrom = Number(from) || null;
+    params.delete('callAction');
+    params.delete('from');
+    const rest = params.toString();
+    history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : ''));
+  }
+}
+
+function tryConsumePendingCallAction() {
+  if (!App.pendingCallAction || !App.call || App.call.status !== 'ringing') return;
+  if (App.pendingCallFrom && App.call.peerId !== App.pendingCallFrom) return;
+  const action = App.pendingCallAction;
+  App.pendingCallAction = null;
+  App.pendingCallFrom = null;
+  if (action === 'accept') acceptIncomingCall();
+  else if (action === 'decline') declineIncomingCall();
 }
 
 function openPendingConversation() {
@@ -979,11 +1012,9 @@ async function openConversation(convId, opts = {}) {
     return;
   }
   App.activeConvId = convId;
-  App.emojiOpen = false;
+  hideEmojiPicker();
   clearReplyTarget();
   closeChatSearch();
-  const picker = document.getElementById('emojiPicker');
-  if (picker) picker.hidden = true;
 
   if (!App.convMeta[convId]) {
     try {
@@ -1866,11 +1897,7 @@ function wireShellEvents() {
     if (menu) menu.hidden = true;
     const notif = document.getElementById('notifDropdown');
     if (notif) notif.remove();
-    const picker = document.getElementById('emojiPicker');
-    if (picker && App.emojiOpen) {
-      picker.hidden = true;
-      App.emojiOpen = false;
-    }
+    if (App.emojiOpen) hideEmojiPicker();
     const attachMenu = document.getElementById('attachMenu');
     if (attachMenu) attachMenu.hidden = true;
   });
@@ -1947,6 +1974,11 @@ function wireShellEvents() {
   document.getElementById('btnEmoji').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleEmojiPicker();
+  });
+
+  // tocar no campo de digitar volta pro teclado normal, escondendo os emojis
+  document.getElementById('msgInput').addEventListener('focus', () => {
+    if (App.emojiOpen) hideEmojiPicker();
   });
 
   document.getElementById('btnAttach').addEventListener('click', (e) => {
@@ -2042,29 +2074,59 @@ function updateComposerButtons() {
   }
 }
 
-function toggleEmojiPicker() {
+function setEmojiButtonIcon(open) {
+  const btn = document.getElementById('btnEmoji');
+  if (btn) btn.innerHTML = open ? ICONS.keyboard : ICONS.emoji;
+}
+
+function ensureEmojiGridBuilt(picker) {
+  if (picker.children.length) return;
+  const grid = el('div', { class: 'emoji-grid' });
+  for (const emoji of EMOJIS) {
+    grid.append(el('button', { class: 'emoji-cell', type: 'button', text: emoji }));
+  }
+  picker.append(grid);
+  picker.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const cell = e.target.closest('.emoji-cell');
+    if (!cell) return;
+    const input = document.getElementById('msgInput');
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + cell.textContent + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + cell.textContent.length;
+    autoResize(input);
+    updateComposerButtons();
+    // De propósito, não chama input.focus() aqui: assim o teclado continua
+    // escondido e o painel de emoji fica aberto, dá pra escolher vários seguidos.
+  });
+}
+
+function showEmojiPicker() {
   const picker = document.getElementById('emojiPicker');
-  App.emojiOpen = !App.emojiOpen;
-  picker.hidden = !App.emojiOpen;
-  if (App.emojiOpen && !picker.children.length) {
-    picker.addEventListener('click', (e) => e.stopPropagation());
-    const grid = el('div', { class: 'emoji-grid' });
-    for (const emoji of EMOJIS) {
-      grid.append(el('button', { class: 'emoji-cell', type: 'button', text: emoji }));
-    }
-    picker.append(grid);
-    picker.addEventListener('click', (e) => {
-      const cell = e.target.closest('.emoji-cell');
-      if (!cell) return;
-      const input = document.getElementById('msgInput');
-      const start = input.selectionStart || input.value.length;
-      const end = input.selectionEnd || input.value.length;
-      input.value = input.value.slice(0, start) + cell.textContent + input.value.slice(end);
-      input.focus();
-      input.selectionStart = input.selectionEnd = start + cell.textContent.length;
-      autoResize(input);
-      updateComposerButtons();
-    });
+  const input = document.getElementById('msgInput');
+  if (!picker || !input) return;
+  App.emojiOpen = true;
+  picker.hidden = false;
+  setEmojiButtonIcon(true);
+  ensureEmojiGridBuilt(picker);
+  input.blur(); // esconde o teclado do celular pra abrir espaço pro painel
+}
+
+function hideEmojiPicker() {
+  const picker = document.getElementById('emojiPicker');
+  if (!picker) return;
+  App.emojiOpen = false;
+  picker.hidden = true;
+  setEmojiButtonIcon(false);
+}
+
+function toggleEmojiPicker() {
+  if (App.emojiOpen) {
+    hideEmojiPicker();
+    document.getElementById('msgInput').focus(); // toque explícito no botão: volta pro teclado
+  } else {
+    showEmojiPicker();
   }
 }
 
@@ -2092,6 +2154,8 @@ function initCallState() {
   };
 }
 App.call = initCallState();
+App.pendingCallAction = null;
+App.pendingCallFrom = null;
 
 function canCallConversation(conv) {
   return !!(conv && conv.type === 'private' && conv.peer && !conv.peer.isBot);
@@ -2179,6 +2243,7 @@ function handleIncomingCallOffer(data) {
   App.call.incomingSdp = data.sdp;
   playRingtone();
   renderCallOverlay();
+  tryConsumePendingCallAction();
 }
 
 async function acceptIncomingCall() {
